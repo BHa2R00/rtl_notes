@@ -5,51 +5,45 @@
 (defun exec (s &rest l) (run-program (car l) (cdr l) :output s))
 (defmacro with-fp-w ((s file) &body b)
   `(with-open-file
-	 (,s ,file
-		 :direction :output
-		 :if-does-not-exist :create
-		 :if-exists :supersede
-		 )
-	 ,@b))
+     (,s ,file
+         :direction :output
+         :if-does-not-exist :create
+         :if-exists :supersede)
+     ,@b))
 (defmacro with-fp-w+ ((s file) &body b)
   `(with-open-file
-	 (,s ,file
-		 :direction :output
-		 :if-does-not-exist :create
-		 :if-exists :append
-		 )
-	 ,@b))
+     (,s ,file
+         :direction :output
+         :if-does-not-exist :create
+         :if-exists :append)
+     ,@b))
 (defmacro with-bfp-w ((s file) &body b)
   `(with-open-file
-	 (,s ,file
-		 :direction :output
-		 :if-does-not-exist :create
-		 :if-exists :supersede
-		 :element-type '(unsigned-byte 8)
-		 )
-	 ,@b))
+     (,s ,file
+         :direction :output
+         :if-does-not-exist :create
+         :if-exists :supersede
+         :element-type '(unsigned-byte 8))
+     ,@b))
 (defmacro with-bfp-w+ ((s file) &body b)
   `(with-open-file
-	 (,s ,file
-		 :direction :output
-		 :if-does-not-exist :create
-		 :if-exists :append
-		 :element-type '(unsigned-byte 8)
-		 )
-	 ,@b))
+     (,s ,file
+         :direction :output
+         :if-does-not-exist :create
+         :if-exists :append
+         :element-type '(unsigned-byte 8))
+     ,@b))
 (defmacro with-fp-r ((s file) &body b)
   `(with-open-file
-	 (,s ,file
-		 :direction :input
-		 )
-	 ,@b))
+     (,s ,file
+         :direction :input)
+     ,@b))
 (defmacro with-bfp-r ((s file) &body b)
   `(with-open-file
-	 (,s ,file
-		 :direction :input
-		 :element-type '(unsigned-byte 8)
-		 )
-	 ,@b))
+     (,s ,file
+         :direction :input
+         :element-type '(unsigned-byte 8))
+     ,@b))
 (defmacro argv () `*command-line-argument-list*)
 (require "cl-ppcre")
 (defun pscan (e s) (cl-ppcre:scan-to-strings e s))
@@ -59,15 +53,15 @@
 (defun pquote (b) (cl-ppcre:quote-meta-chars b))
 (defmacro doline ((s end cnt line) &body b) 
   `(do ((,cnt 1 (+ ,cnt 1))
-		(,line (read-line ,s nil ,end) (read-line ,s nil ,end)))
-	 ((equalp ,line ,end))
-	 ,@b))
+        (,line (read-line ,s nil ,end) (read-line ,s nil ,end)))
+     ((equalp ,line ,end))
+     ,@b))
 (defun pmatchlines (file p)
   (let ((r (list)))
-	(with-fp-r
-	  (s file)
-	  (doline
-		(s 'end k line)
-		(if (pscan p line) (push k r))))
-	r))
+    (with-fp-r
+      (s file)
+      (doline
+        (s 'end k line)
+        (if (pscan p line) (push k r))))
+    r))
 (load "soc.lisp")
