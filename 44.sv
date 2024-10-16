@@ -4,8 +4,9 @@
 module lpuart (               //# bus: slave=u_lpuart, addr0=h010a ;
   output test_so, 
   input test_se, test_si,
-  output tx,                  //# io: mux={1,3,5} ;
-  input rx,                   //# io: mux={0,2,4} ;
+  output tx, rts,             //# io: mux={1,3,5} ;
+  input rx, cts,              //# io: mux={0,2,4} ;
+  input fc, 				  //# bus: addr=h0000, data[ 8: 8], type=rw  ; enable flow control 
   output reg rintr, wintr,    //# bus: addr=h0003, data[25:24], type=ro  ; dma: req=rx, req=tx ; intr;
   input [3:0] rlht, rhlt,     //# bus: addr=h0003, data[23:18], type=rw  ; "read fifo interrupt low2high and high2low trigger"
   input [3:0] wlht, whlt,     //# bus: addr=h0003, data[17:12], type=rw  ; "write fifo interrupt low2high and high2low trigger"
@@ -27,7 +28,6 @@ wire ena_7bit = mode[1:0] == 2'b10;
 wire ena_6bit = mode[1:0] == 2'b11;
 wire ena_parity = mode[2];
 wire even = mode[3];
-wire cts;
 reg [1:0] cts_d;
 wire cts_p = cts_d == 2'b01;
 reg [7:0] cnt;
@@ -70,11 +70,17 @@ wire tidle = ta == 4'd9;
 wire ridle = ra == 4'd9;
 reg valid;
 assign rchar = rb[ra0[2:0]];
-assign cts = (~wempty) || ((~rfull) && (~rx));
+wire send = fc ? cts : (~wempty) || ((~rfull) && (~rx));
+reg [1:0] rts_d;
+assign rts = fc && rts_d[1];
 
 always@(negedge frstb or posedge fclk) begin
+  if(~frstb) rts_d <= 2'b11;
+  else rts_d <= {rts_d[0],ridle};
+end
+always@(negedge frstb or posedge fclk) begin
   if(~frstb) cts_d <= 2'b11;
-  else cts_d <= {cts_d[0],cts};
+  else cts_d <= {cts_d[0],send};
 end
 always@(negedge rstb or posedge clk) begin
   if(~rstb) eq_d <= 2'b11;
@@ -97,7 +103,7 @@ end
 always@(*) begin
   ta = ra;
   case(ra)
-    4'd9 : if(cts) ta = 4'd10;
+    4'd9 : if(send) ta = 4'd10;
     4'd10: ta = 4'd0;
     4'd4 : ta = ena_6bit ? (ena_parity ? 4'd8 : 4'd9) : ta + 4'd1;
     4'd5 : ta = ena_7bit ? (ena_parity ? 4'd8 : 4'd9) : ta + 4'd1;
@@ -197,7 +203,9 @@ endmodule
 `ifdef SIM
 module lpuart_tb;
 
+wire rts1, rts2;
 wire x1, x2;
+reg fc;
 wire rintr1, wintr1;
 wire rintr2, wintr2;
 reg [3:0] rlht1, rhlt1;
@@ -225,8 +233,9 @@ reg [16:0] baud;
 reg [5:0] bauda;
 
 lpuart u_lpuart1 (
-  .rx(x2), 
-  .tx(x1), 
+  .rx(x2), .rts(rts1), 
+  .tx(x1), .cts(rts2), 
+  .fc(fc), 
   .rintr(rintr1), .wintr(wintr1), 
   .rlht(rlht1), .rhlt(rhlt1), 
   .wlht(wlht1), .whlt(whlt1), 
@@ -244,8 +253,9 @@ lpuart u_lpuart1 (
 );
 
 lpuart u_lpuart2 (
-  .rx(x1), 
-  .tx(x2), 
+  .rx(x1), .rts(rts2),  
+  .tx(x2), .cts(rts1),  
+  .fc(fc), 
   .rintr(rintr2), .wintr(wintr2), 
   .rlht(rlht2), .rhlt(rhlt2), 
   .wlht(wlht2), .whlt(whlt2), 
@@ -316,20 +326,22 @@ initial begin
   baudm[16] =     75;
   baudm[17] =     50;
   mode = 4'b0000;
-  bauda = $urandom_range(0,6);
+  bauda = $urandom_range(4,6);
   baud = baudm[bauda];
   div1 = 2000000/baud; div1[0]=1'b0; $write("baud=%d, div1=%x\n", baud, div1);
   div2 = 2000000/baud; div2[0]=1'b0; $write("baud=%d, div2=%x\n", baud, div2);
-  repeat(5) begin
+  fc = 1'b0;
+  repeat(55) begin
     repeat(5) @(posedge clk); rstb = 1'b1;
     repeat(5) @(posedge clk); frstb = 1'b1;
     repeat(5) @(posedge clk); setb = 1'b1;
     repeat(5) begin
-    bauda = $urandom_range(0,6);
+    bauda = $urandom_range(5,6);
     baud = baudm[bauda];
     div1 = 2000000/baud; div1[0]=1'b0; $write("baud=%d, div1=%x\n", baud, div1);
     div2 = 2000000/baud; div2[0]=1'b0; $write("baud=%d, div2=%x\n", baud, div2);
     mode = $urandom_range(0,4'b1111);
+	fc = $urandom_range(0,1);
     if(mode[2]) $write("parity, ");
     if(mode[3]) $write("even, ");
     case(mode[1:0])
