@@ -6,7 +6,7 @@ module lpuart (               //# bus: slave=u_lpuart, addr0=h010a ;
   input test_se, test_si,
   output tx, rts,             //# io: mux={1,3,5} ;
   input rx, cts,              //# io: mux={0,2,4} ;
-  input fc, 				  //# bus: addr=h0000, data[ 8: 8], type=rw  ; enable flow control 
+  input fc, 		      //# bus: addr=h0000, data[ 8: 8], type=rw  ; "enable flow control "
   output reg rintr, wintr,    //# bus: addr=h0003, data[25:24], type=ro  ; dma: req=rx, req=tx ; intr;
   input [3:0] rlht, rhlt,     //# bus: addr=h0003, data[23:18], type=rw  ; "read fifo interrupt low2high and high2low trigger"
   input [3:0] wlht, whlt,     //# bus: addr=h0003, data[17:12], type=rw  ; "write fifo interrupt low2high and high2low trigger"
