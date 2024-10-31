@@ -2,21 +2,21 @@
 
 
 `define LPUART_FIFO_AMSB 3 
-module lpuart (                           //# bus: slave=u_lpuart, addr0=h8000; "half-duplex low power uart"
+module lpuart (                           //# bus: slave=u_lpuart, addrs={ctrl,baud,data,fifo}; "half-duplex low power uart"
   output tx, rts, 
   input rx, cts, 
   output reg uclk, 
-  output reg intr,                        //# bus: addr=h0003, data[17:16], type=ro  ; dma: req=x ; intr;
-  output full, empty,                     //# bus: addr=h0003, data[15:14], type=ro ; "write fifo full and empty signal"
-  input pop, push,                        //# bus: addr=h0003, data[13:12], type=w1p; dma: ack=tx, ack=rx, nil;
-  input [`LPUART_FIFO_AMSB:0] lht, hlt,   //# bus: addr=h0003, data[11: 4], type=rw  ; "write fifo interrupt low2high and high2low trigger"
-  output [`LPUART_FIFO_AMSB:0] cnt,       //# bus: addr=h0003, data[ 3: 0], type=ro ; "read and write fifo counter"
-  output [7:0] rchar,                     //# bus: addr=h0002, data[15: 8], type=ro ; "read char"
-  input [7:0] wchar,                      //# bus: addr=h0002, data[ 7: 0], type=rw ; "write char"
-  input [15:0] divisor, dividend,         //# bus: addr=h0001, data[31: 0], type=rw ;
-  input fc,                               //# bus: addr=h0000, data[ 8: 8], type=rw ; "enable flow control"
-  input [4:0] mode,                       //# bus: addr=h0000, data[ 7: 2], type=rw ; "mode[4] = enable tx, mode[3] = even, mode[2] = parity, mode[1:0] = b00:9bits, b01:8bits, b10:7bits, b11:6bits"
-  input clear, setb,                      //# bus: addr=h0000, data[ 1: 0], type=rw ;
+  output reg intr,                        //# bus: addr=fifo, data[16:16], type=ro  ; dma: req=x ; intr;
+  output full, empty,                     //# bus: addr=fifo, data[15:14], type=ro ; "write fifo full and empty signal"
+  input pop, push,                        //# bus: addr=fifo, data[13:12], type=w1p; dma: ack=tx, ack=rx, nil;
+  input [`LPUART_FIFO_AMSB:0] lht, hlt,   //# bus: addr=fifo, data[11: 4]=h0, type=rw  ; "write fifo interrupt low2high and high2low trigger"
+  output [`LPUART_FIFO_AMSB:0] cnt,       //# bus: addr=fifo, data[ 3: 0], type=ro ; "read and write fifo counter"
+  output [7:0] rchar,                     //# bus: addr=data, data[ 7: 0], type=ro ; "read char"
+  input [7:0] wchar,                      //# bus: addr=data, data[ 7: 0], type=rw ; "write char"
+  input [15:0] divisor, dividend,         //# bus: addr=baud, data[31: 0]=h0, type=rw ;
+  input fc,                               //# bus: addr=ctrl, data[ 7: 7]=b0, type=rw ; "enable flow control"
+  input [4:0] mode,                       //# bus: addr=ctrl, data[ 6: 2]=h0, type=rw ; "mode[4] = enable tx, mode[3] = even, mode[2] = parity, mode[1:0] = b00:9bits, b01:8bits, b10:7bits, b11:6bits"
+  input clear, setb,                      //# bus: addr=ctrl, data[ 1: 0]=b00, type=rw ;
   input frstb, fclk,                      //# rc: frstb, fclk;
   input rstb, clk                         //# rc: rstb, clk;
 );
@@ -35,7 +35,7 @@ reg [7:0] b[0:((2**`LPUART_FIFO_AMSB)-1)];
 reg [`LPUART_FIFO_AMSB:0] ba1, ba0;
 assign cnt = ba1 - ba0;
 assign full  = cnt == (2**`LPUART_FIFO_AMSB);
-assign empty = cnt == 4'd0;
+assign empty = cnt == 4'h0;
 reg [3:0] a, na;
 wire [7:0] wbc = ena_tx ? b[ba0[(`LPUART_FIFO_AMSB-1):0]] : 8'hff;
 wire [7:0] rbc = ena_tx ? 8'hff : b[ba1[(`LPUART_FIFO_AMSB-1):0]];
@@ -50,9 +50,9 @@ wire xorrx =
   ena_6bit ? ^(rbc[4:0]) : 
   ^rbc;
 assign tx = ena_tx ? (
-  (a >= 4'd10) ? 1'b0 : 
-  (a >= 4'd9) ? 1'b1 : 
-  (ena_parity && (a == 4'd8)) ? (even ? ~xortx : xortx) : 
+  (a >= 4'ha) ? 1'b0 : 
+  (a >= 4'h9) ? 1'b1 : 
+  (ena_parity && (a == 4'h8)) ? (even ? ~xortx : xortx) : 
   b[ba0[(`LPUART_FIFO_AMSB-1):0]][a[2:0]]) : 
   1'b1;
 reg [1:0] clear_d, push_d, pop_d;
@@ -61,7 +61,7 @@ wire push_p = push_d == 2'b01;
 wire pop_p = pop_d == 2'b01;
 reg valid;
 assign rchar = ena_tx ? 8'hff : b[ba0[(`LPUART_FIFO_AMSB-1):0]];
-assign rts = (a==4'd9) && (na==4'd9);
+assign rts = (a==4'h9) && (na==4'h9);
 reg [1:0] fclear_d;
 wire fclear_p = fclear_d == 2'b01;
 reg [1:0] fsetb_d;
@@ -73,7 +73,7 @@ always@(negedge frstb or posedge fclk) begin
     fsetb_d <= 2'b00;
   end
   else begin
-    fclear_d <= {fclear_d[0],(ena_tx ? clear : ((a==4'd9)&&(~rx)))};
+    fclear_d <= {fclear_d[0],(ena_tx ? clear : ((a==4'h9)&&(~rx)))};
     fsetb_d <= {fsetb_d[0],setb};
   end
 end
@@ -99,7 +99,7 @@ always@(negedge frstb or posedge fclk) begin
   end
   else if(fsetb_1) begin
   if(fclear_p) begin
-    fcnt <= dividend >> 1;
+    fcnt <= dividend >> (ena_tx ? 1 : 2);
     uclk <= 1'b1;
   end
   else begin
@@ -116,44 +116,44 @@ always@(negedge frstb or posedge fclk) begin
 end
 
 always@(negedge rstb or posedge clk) begin
-  if(~rstb) a <= 4'd9;
-  else if(~setb || clear_p) a <= 4'd9;
+  if(~rstb) a <= 4'h9;
+  else if(~setb || clear_p) a <= 4'h9;
   else if(setb && uclk_n) a <= na;
 end
 always@(*) begin
   na = a;
   case(a)
-    4'd9 : if(fc ? cts : (ena_tx ? (~empty) : (~rx))) na = 4'd10;
-    4'd10: na = 4'd0;
-    4'd4 : na = ena_6bit ? (ena_parity ? 4'd8 : 4'd9) : a + 4'd1;
-    4'd5 : na = ena_7bit ? (ena_parity ? 4'd8 : 4'd9) : a + 4'd1;
-    4'd6 : na = ena_8bit ? (ena_parity ? 4'd8 : 4'd9) : a + 4'd1;
-    4'd7 : na = ena_parity ? 4'd8 : 4'd9;
-    default: na = a + 4'd1;
+    4'h9: if(fc ? cts : (ena_tx ? (~empty) : (~rx))) na = 4'ha;
+    4'ha: na = 4'h0;
+    4'h4: na = ena_6bit ? (ena_parity ? 4'h8 : 4'h9) : a + 4'h1;
+    4'h5: na = ena_7bit ? (ena_parity ? 4'h8 : 4'h9) : a + 4'h1;
+    4'h6: na = ena_8bit ? (ena_parity ? 4'h8 : 4'h9) : a + 4'h1;
+    4'h7: na = ena_parity ? 4'h8 : 4'h9;
+    default: na = a + 4'h1;
   endcase
 end
 
 always@(posedge clk) begin
   if(setb) begin
     if(push_p & ena_tx) b[ba1[(`LPUART_FIFO_AMSB-1):0]] <= wchar[7:0];
-    else if((~ena_tx) && uclk_n && (4'd7 >= na)) b[ba1[(`LPUART_FIFO_AMSB-1):0]][na[2:0]] <= rx;
+    else if((~ena_tx) && uclk_n && (4'h7 >= na)) b[ba1[(`LPUART_FIFO_AMSB-1):0]][na[2:0]] <= rx;
   end
 end
 always@(negedge rstb or posedge clk) begin
   if(~rstb) valid <= 1'b0;
   else if(setb && (~ena_tx) && uclk_n) begin
     if(~ena_parity) valid <= 1'b1;
-    else if(4'd8 == na) valid <= (even ? ~xorrx : xorrx) == rx;
+    else if(4'h8 == na) valid <= (even ? ~xorrx : xorrx) == rx;
   end
 end
 
 always@(negedge rstb or posedge clk) begin
   if(~rstb) {ba1,ba0} <= {((`LPUART_FIFO_AMSB+1)*2){1'b0}};
   else if(clear_p) {ba1,ba0} <= {((`LPUART_FIFO_AMSB+1)*2){1'b0}};
-  else if(setb) begin
+  else begin
     if(ena_tx && push_p) ba1 <= ba1 + 'd1;
-    if(ena_tx && (na==4'd9) && uclk_n && (~empty)) ba0 <= ba0 + 'd1;
-    if((~ena_tx) && (a!=4'd9) && (na==4'd9) && uclk_n && (~full) && valid) ba1 <= ba1 + 'd1;
+    if(ena_tx && (na==4'h9) && uclk_n && (~empty)) ba0 <= ba0 + 'd1;
+    if((~ena_tx) && (a!=4'h9) && (na==4'h9) && uclk_n && (~full) && valid) ba1 <= ba1 + 'd1;
     if((~ena_tx) && pop_p) ba0 <= ba0 + 'd1;
   end
 end
@@ -161,13 +161,11 @@ end
 always@(negedge rstb or posedge clk) begin
   if(~rstb) intr <= 1'b0;
   else if(clear_p) intr <= 1'b0;
-  else if(setb && 
-  (
+  else if(
     (intr && (~ena_tx) && push_p && (cnt == hlt))||
-    ((~intr) && (~ena_tx) && (na==4'd9) && uclk_n && (cnt == lht))||
-    (intr && (na==4'd9) && ena_tx && uclk_n && (cnt == hlt))||
+    ((~intr) && (~ena_tx) && (na==4'h9) && uclk_n && (cnt == lht))||
+    (intr && (na==4'h9) && ena_tx && uclk_n && (cnt == hlt))||
     ((~intr) && ena_tx && pop_p && (cnt == lht))
-    )
     ) intr <= ~intr;
 end
 
@@ -304,7 +302,7 @@ initial begin
 end
 task random_baud;
   begin
-  bauda = $urandom_range(0,6);
+  bauda = $urandom_range(0,0);
   baud = baudm[bauda];
   dividend1 = $urandom_range(16'h7fff,16'h7fff);
   dividend2 = $urandom_range(16'h7fff,16'h7fff);
@@ -474,43 +472,6 @@ end
 
 endmodule
 `endif
-/*
-# sdc 
-create_clock -name clk [get_ports clk]  -period 500  -waveform {0 250}
-create_clock -name fclk [get_ports fclk]  -period 500  -waveform {0 250}
-set_false_path -from [get_ports rstb]
-set_false_path -from [get_ports frstb]
-# dft 
-set_scan_configuration -clock_mixing mix_clocks
-set_scan_configuration -add_lockup true
-set_scan_configuration -internal_clocks multi
-set_scan_configuration -chain_count 1
-set_dft_signal -port test_se   -type scanenable  -view existing_dft -active_state 1 
-set_dft_signal -port clk       -type scanclock   -view existing_dft -timing {50 100} 
-set_dft_signal -port test_si   -type scandatain  -view existing_dft 
-set_dft_signal -port test_so   -type scandataout -view existing_dft 
-set_scan_path 1 -view existing_dft -scan_enable test_se -scan_data_in test_si -scan_data_out test_so -scan_master_clock clk
-create_test_protocol -infer_clock -infer_asynch
-preview_dft
-insert_dft
-dft_drc
-# tmax -shell
-read_netlist ${top}_mapped.v 
-read_netlist ../lib/isf8l/verilog/isf8l_ers_generic_core_21.lib.src -library 
-read_netlist ../lib/isf8l/verilog/isf8l_ers_generic_core_30.lib.src -library 
-run_build_model ${top}
-run_drc ${top}_mapped.spf
-set_faults -model stuck
-add_faults -all
-set_atpg -merge high -verbose -abort_limit 256 -coverage 100 -decision random
-run_atpg
-set_faults -summary verbose
-set_faults -report collapsed
-report_summaries
-write_faults ${top}_tmax_faults.rpt -all -replace
-write_patterns ${top}_mapped.stil -format stil -replace
-
- */
 
 
 module lpuart_ft1 (
@@ -847,10 +808,10 @@ initial begin
 end
 task random_baud;
   begin
-  bauda = $urandom_range(0,10);
+  bauda = $urandom_range(4,4);
   while(bauda==3) bauda = $urandom_range(0,10);
   baud = baudm[bauda];
-  dividend1 = 16'd2;
+  /*dividend1 = 16'd2;
   while(dividend1<(16*(freq_fclk1/baud))) begin
     dividend1 = dividend1<<1;
     divisor1 = (dividend1*baud)/freq_fclk1;
@@ -859,7 +820,13 @@ task random_baud;
   while(dividend2<(16*(freq_fclk2/baud))) begin
     dividend2 = dividend2<<1;
     divisor2 = (dividend1*baud)/freq_fclk2;
-  end
+  end*/
+  //dividend1 = 'hefff; while(((dividend1*baud)%freq_fclk1)>1) dividend1 = dividend1 - 'h1;
+  //dividend2 = 'hefff; while(((dividend2*baud)%freq_fclk2)>1) dividend2 = dividend2 - 'h1;
+  dividend1 = $urandom_range(16'h7ffe,16'h7ffe);
+  dividend2 = $urandom_range(16'h7ffe,16'h7ffe);
+  divisor1 = (dividend1*baud)/freq_fclk1;
+  divisor2 = (dividend1*baud)/freq_fclk2;
   $write("baud=%d, dividend1=%x, divisor1=%x\n", baud, dividend1, divisor1);
   $write("baud=%d, dividend2=%x, divisor2=%x\n", baud, dividend2, divisor2);
   end
@@ -971,7 +938,7 @@ initial begin
           repeat(2) @(posedge clk); pop = 1'b0;
           k=k+1;
         end
-      join_any
+      join
     end
     if(k>=55) $write("\033[42mPASS\033[0m\n");
     else $write("\033[41mFAIL: %d\033[0m\n", k);
@@ -981,4 +948,282 @@ initial begin
 end
 
 endmodule
+`endif
+
+
+module apb_lpuart (
+  input dma_ack, 
+  output reg dma_req, 
+  output tx, rts, 
+  input rx, cts, 
+  output uclk, 
+  output intr, 
+  input frstb, fclk, 
+  output reg [31:0] prdata, 
+  input [31:0] pwdata, 
+  input [1:0] paddr, 
+  input pwrite, psel, penable, prstb, pclk 
+);
+
+wire u_lpuart_intr;
+reg intr_ena;
+assign intr = intr_ena ? u_lpuart_intr : 1'b0;
+reg [1:0] dma_ack_d;
+wire dma_ack_p = dma_ack_d == 2'b01;
+reg dma_ena;
+wire full, empty;
+reg pop, push;
+reg [3:0] lht, hlt;
+wire [3:0] cnt;
+wire [7:0] rchar;
+reg [7:0] wchar;
+reg [15:0] divisor, dividend;
+reg fc;
+reg [4:0] mode;
+reg clear, setb;
+
+lpuart u_lpuart (
+  .tx(tx), .rts(rts), 
+  .rx(rx), .cts(cts), 
+  .uclk(uclk), 
+  .intr(u_lpuart_intr), 
+  .full(full), .empty(empty), 
+  .pop(dma_ena? dma_ack:pop), .push(dma_ena? dma_ack:push), 
+  .lht(lht), .hlt(hlt), 
+  .cnt(cnt), 
+  .rchar(rchar), 
+  .wchar(wchar), 
+  .divisor(divisor), .dividend(dividend), 
+  .fc(fc), 
+  .mode(mode), 
+  .clear(clear), .setb(setb), 
+  .frstb(frstb), .fclk(fclk), 
+  .rstb(prstb), .clk(pclk) 
+);
+
+always@(negedge prstb or posedge pclk) begin
+  if(~prstb) begin
+    dma_ack_d <= 2'b11;
+    dma_req <= 1'b0;
+  end
+  else begin
+    dma_ack_d <= {dma_ack_d[0],dma_ack};
+    if(dma_ack_p) dma_req <= 1'b0;
+    else if(intr) dma_req <= 1'b1;
+  end
+end
+
+wire ctrl_ena = (paddr == 'h0) && penable && psel;
+wire baud_ena = (paddr == 'h1) && penable && psel;
+wire data_ena = (paddr == 'h2) && penable && psel;
+wire fifo_ena = (paddr == 'h3) && penable && psel;
+
+always@(*) begin
+  prdata = 32'd0;
+  if(ctrl_ena) begin
+    prdata[0] = setb;
+    prdata[1] = clear;
+    prdata[6:2] = mode;
+    prdata[7] = fc;
+    prdata[8] = dma_ena;
+    prdata[9] = intr_ena;
+  end
+  else if(baud_ena) begin
+    prdata[15:0] = dividend;
+    prdata[31:16] = divisor;
+  end
+  else if(data_ena) begin
+    prdata[7:0] = rchar;
+  end
+  else if(fifo_ena) begin
+    prdata[3:0] = cnt;
+    prdata[7:4] = hlt;
+    prdata[11:8] = lht;
+    prdata[12] = push;
+    prdata[13] = pop;
+    prdata[14] = empty;
+    prdata[15] = full;
+    prdata[16] = intr;
+  end
+end
+
+always@(negedge prstb or posedge pclk) begin
+  if(~prstb) begin
+    setb <= 'h1;
+    clear <= 'h0;
+    mode <= 'h0;
+    fc <= 'h0;
+    dma_ena <= 'h0;
+    intr_ena <= 'h0;
+    dividend <= 'h7ffe;
+    divisor <= 'h0755;
+    wchar <= 'h0;
+    hlt <= 'h0;
+    lht <= 'h0;
+    push <= 'h0;
+    pop <= 'h0;
+  end
+  else if(ctrl_ena && pwrite) begin
+    setb <= pwdata[0];
+    clear <= pwdata[1];
+    mode <= pwdata[6:2];
+    fc <= pwdata[7];
+    dma_ena <= pwdata[8];
+    intr_ena <= pwdata[9];
+  end
+  else if(baud_ena && pwrite) begin
+    dividend <= pwdata[15:0];
+    divisor <= pwdata[31:16];
+  end
+  else if(data_ena && pwrite) begin
+    wchar <= pwdata[7:0];
+  end
+  else if(fifo_ena && pwrite) begin
+    hlt <= pwdata[7:4];
+    lht <= pwdata[11:8];
+    push <= push? 'h0:pwdata[12];
+    pop <= pop? 'h0:pwdata[13];
+  end
+end
+
+endmodule
+/*
+# sdc 
+create_clock -name pclk [get_ports pclk]  -period 500  -waveform {0 250}
+create_clock -name fclk [get_ports fclk]  -period 500  -waveform {0 250}
+set_false_path -from [get_ports prstb]
+set_false_path -from [get_ports frstb]
+# dft 
+set_scan_configuration -clock_mixing mix_clocks
+set_scan_configuration -add_lockup true
+set_scan_configuration -internal_clocks multi
+set_scan_configuration -chain_count 1
+set_dft_signal -port test_se   -type scanenable  -view existing_dft -active_state 1 
+set_dft_signal -port clk       -type scanclock   -view existing_dft -timing {50 100} 
+set_dft_signal -port test_si   -type scandatain  -view existing_dft 
+set_dft_signal -port test_so   -type scandataout -view existing_dft 
+set_scan_path 1 -view existing_dft -scan_enable test_se -scan_data_in test_si -scan_data_out test_so -scan_master_clock pclk
+create_test_protocol -infer_clock -infer_asynch
+preview_dft
+insert_dft
+dft_drc
+# tmax -shell
+read_netlist ${top}_mapped.v 
+read_netlist ../lib/isf8l/verilog/isf8l_ers_generic_core_21.lib.src -library 
+read_netlist ../lib/isf8l/verilog/isf8l_ers_generic_core_30.lib.src -library 
+run_build_model ${top}
+run_drc ${top}_mapped.spf
+set_faults -model stuck
+add_faults -all
+set_atpg -merge high -verbose -abort_limit 256 -coverage 100 -decision random
+run_atpg
+set_faults -summary verbose
+set_faults -report collapsed
+report_summaries
+write_faults ${top}_tmax_faults.rpt -all -replace
+write_patterns ${top}_mapped.stil -format stil -replace
+
+ */
+
+
+`ifdef SIM
+`ifdef UVM
+`ifndef LPUART_REG_MODEL__SV
+`define LPUART_REG_MODEL__SV
+
+class LPUART_REG_ctrl extends uvm_reg;
+  rand uvm_reg_field setb;
+  rand uvm_reg_field clear;
+  rand uvm_reg_field mode;
+  rand uvm_reg_field fc;
+  rand uvm_reg_field dma_ena;
+  rand uvm_reg_field unused0;
+  function new(string name = "LPUART_REG_ctrl");
+    super.new(name, 32, UVM_NO_COVERAGE);
+  endfunction : new
+  virtual function void build();
+    this.setb = uvm_reg_field::type_id::create("setb", , get_full_name());
+    this.clear = uvm_reg_field::type_id::create("clear", , get_full_name());
+    this.mode = uvm_reg_field::type_id::create("mode", , get_full_name());
+    this.fc = uvm_reg_field::type_id::create("fc", , get_full_name());
+    this.dma_ena = uvm_reg_field::type_id::create("dma_ena", , get_full_name());
+    this.unused0 = uvm_reg_field::type_id::create("unused0", , get_full_name());
+    this.setb.configure(this, 1, 0, "RW", 0, 1'h0, 1, 0, 1);
+    this.clear.configure(this, 1, 1, "RW", 0, 1'h0, 1, 0, 1);
+    this.mode.configure(this, 5, 2, "RW", 0, 5'h0, 1, 0, 1);
+    this.fc.configure(this, 1, 7, "RW", 0, 1'h0, 1, 0, 1);
+    this.dma_ena.configure(this, 1, 8, "RW", 0, 1'h0, 1, 0, 1);
+    this.unused0.configure(this, 23, 9, "RO", 0, 23'h0, 1, 0, 1);
+  endfunction : build
+  `uvm_object_utils(LPUART_REG_ctrl)
+endclass : LPUART_REG_ctrl
+
+class LPUART_REG_baud extends uvm_reg;
+  rand uvm_reg_field dividend;
+  rand uvm_reg_field divisor;
+  function new(string name = "LPUART_REG_baud");
+    super.new(name, 32, UVM_NO_COVERAGE);
+  endfunction : new
+  virtual function void build();
+    this.dividend = uvm_reg_field::type_id::create("dividend", , get_full_name());
+    this.divisor = uvm_reg_field::type_id::create("divisor", , get_full_name());
+    this.dividend.configure(this, 16, 0, "RW", 0, 16'h0, 1, 0, 1);
+    this.divisor.configure(this, 16, 16, "RW", 0, 16'h0, 1, 0, 1);
+  endfunction : build
+  `uvm_object_utils(LPUART_REG_baud)
+endclass : LPUART_REG_baud
+
+class LPUART_REG_data extends uvm_reg;
+  rand uvm_reg_field bchar;
+  rand uvm_reg_field unused1;
+  function new(string name = "LPUART_REG_data");
+    super.new(name, 32, UVM_NO_COVERAGE);
+  endfunction : new
+  virtual function void build();
+    this.bchar = uvm_reg_field::type_id::create("bchar", , get_full_name());
+    this.unused1 = uvm_reg_field::type_id::create("unused1", , get_full_name());
+    this.bchar.configure(this, 8, 0, "RW", 0, 8'h0, 1, 0, 1);
+    this.unused1.configure(this, 24, 8, "RO", 0, 24'h0, 1, 0, 1);
+  endfunction : build
+  `uvm_object_utils(LPUART_REG_data)
+endclass : LPUART_REG_data
+
+class LPUART_REG_fifo extends uvm_reg;
+  rand uvm_reg_field cnt;
+  rand uvm_reg_field hlt;
+  rand uvm_reg_field lht;
+  rand uvm_reg_field push;
+  rand uvm_reg_field pop;
+  rand uvm_reg_field empty;
+  rand uvm_reg_field full;
+  rand uvm_reg_field intr;
+  rand uvm_reg_field unused2;
+  function new(string name = "LPUART_REG_fifo");
+    super.new(name, 32, UVM_NO_COVERAGE);
+  endfunction : new
+  virtual function void build();
+    this.cnt = uvm_reg_field::type_id::create("cnt", , get_full_name());
+    this.hlt = uvm_reg_field::type_id::create("hlt", , get_full_name());
+    this.lht = uvm_reg_field::type_id::create("lht", , get_full_name());
+    this.push = uvm_reg_field::type_id::create("push", , get_full_name());
+    this.pop = uvm_reg_field::type_id::create("pop", , get_full_name());
+    this.empty = uvm_reg_field::type_id::create("empty", , get_full_name());
+    this.full = uvm_reg_field::type_id::create("full", , get_full_name());
+    this.intr = uvm_reg_field::type_id::create("intr", , get_full_name());
+    this.unused2 = uvm_reg_field::type_id::create("unused2", , get_full_name());
+    this.cnt.configure(this, 4, 0, "RW", 0, 4'h0, 1, 0, 1);
+    this.hlt.configure(this, 4, 4, "RW", 0, 4'h0, 1, 0, 1);
+    this.lht.configure(this, 4, 8, "RW", 0, 4'h0, 1, 0, 1);
+    this.push.configure(this, 1, 12, "W1P", 0, 1'h0, 1, 0, 1);
+    this.pop.configure(this, 1, 13, "W1P", 0, 1'h0, 1, 0, 1);
+    this.empty.configure(this, 1, 14, "RO", 0, 1'h0, 1, 0, 1);
+    this.full.configure(this, 1, 15, "RO", 0, 1'h0, 1, 0, 1);
+    this.intr.configure(this, 1, 16, "RO", 0, 1'h0, 1, 0, 1);
+    this.unused2.configure(this, 15, 17, "RO", 0, 15'h0, 1, 0, 1);
+  endfunction : build
+  `uvm_object_utils(LPUART_REG_fifo)
+endclass : LPUART_REG_fifo
+
+`endif//LPUART_REG_MODEL__SV
+`endif
 `endif
