@@ -1,13 +1,16 @@
 *lib
 .temp 25
-.model n12ll nmos level=54 
-+ vth0=0.5  vfb=0 k1=0.48 dvt0=3.8  u0=0.016 vsat=8.8e4
-.model p12ll pmos level=54 
-+ vth0=-0.5 vfb=0 k1=0.48 dvt0=0.25 u0=0.008 vsat=8.7e4
+.model n12ll nmos level=54 vth0=0.5  k1=0.48 dvt0=3.8  u0=0.016 vsat=8.8e4
+.model p12ll pmos level=54 vth0=-0.5 k1=0.48 dvt0=0.25 u0=0.008 vsat=8.7e4
 *mn d g s b n12ll l=60n w=130n
 *mp d g s b p12ll l=60n w=150n
 
 *cdl
+*.subckt invx0 i o vcc gnd vccnw 
+*mn0 o i gnd gnd   n12ll l=1u w=130n
+*mp0 o i vcc vccnw p12ll l=1u w=150n
+*.ends
+
 .subckt invx1 i o vcc gnd vccnw 
 mn0 o i gnd gnd   n12ll l=60n w=130n
 mp0 o i vcc vccnw p12ll l=60n w=150n
@@ -24,12 +27,17 @@ mn3 net1 i  gnd  gnd   n12ll l=60n w=130n
 mp3 net2 i  vcc  vccnw p12ll l=60n w=150n
 .ends
 
-*.subckt nand2x1 i1 i2 o vcc gnd vccnw 
-*mn0 net1 i2 gnd  gnd   n12ll l=60n w=260n
-*mn1 o    i1 net1 gnd   n12ll l=60n w=260n
-*mp0 o    i1 vcc  vccnw p12ll l=60n w=150n
-*mp1 o    i2 vcc  vccnw p12ll l=60n w=150n
-*.ends
+.subckt nand2x1 i1 i2 o vcc gnd vccnw 
+mn0 net1 i2 gnd  gnd   n12ll l=60n w=260n
+mn1 o    i1 net1 gnd   n12ll l=60n w=260n
+mp0 o    i1 vcc  vccnw p12ll l=60n w=150n
+mp1 o    i2 vcc  vccnw p12ll l=60n w=150n
+.ends
+
+.subckt and2x1 i1 i2 o vcc gnd vccnw 
+x1 i1 i2 ob  vcc gnd   vccnw nand2x1
+x2 ob o  vcc gnd vccnw invx1
+.ends
 
 *.subckt sbrblah sb rb q qb vcc gnd vccnw 
 *xq  sb qb q  vcc gnd vccnw nand2x1
@@ -37,10 +45,10 @@ mp3 net2 i  vcc  vccnw p12ll l=60n w=150n
 *.ends
 
 .subckt nor2x0 i1 i2 o vcc gnd vccnw 
-mp0 net1 i2 vcc  vccnw p12ll l=4u w=300n
-mp1 o    i1 net1 vccnw p12ll l=4u w=300n
-mn0 o    i1 gnd  gnd   n12ll l=4u w=130n
-mn1 o    i2 gnd  gnd   n12ll l=4u w=130n
+mp0 net1 i2 vcc  vccnw p12ll l=10u w=300n
+mp1 o    i1 net1 vccnw p12ll l=10u w=300n
+mn0 o    i1 gnd  gnd   n12ll l=10u w=130n
+mn1 o    i2 gnd  gnd   n12ll l=10u w=130n
 .ends
 
 .subckt srlahx0 s r q qb vcc gnd vccnw 
@@ -55,7 +63,7 @@ mn1 offb off  gnd gnd   n12ll l=60n w=130n
 mp1 offb off  vcc vccwn p12ll l=60n w=150n
 .ends
 
-.subckt varcap 
+.subckt varcap8 
 + d
 + cal[7] cal[6] cal[5] cal[4] 
 + cal[3] cal[2] cal[1] cal[0] 
@@ -79,92 +87,70 @@ mnc0 gnd net0 gnd gnd n12ll l=0.07u w=0.12u
 .ends
 
 .subckt tspcfreqdiv ck q vcc gnd vccnw
-mp00 net1 q    vcc  vccnw p12ll l=60n w=150n
-mp01 b    ck   net1 vccnw p12ll l=60n w=150n
-mn02 b    q    gnd  gnd   n12ll l=60n w=130n
-mp10 a    ck   vcc  vccnw p12ll l=60n w=150n
-mn11 a    b    net2 gnd   n12ll l=60n w=130n
-mn12 net2 ck   gnd  gnd   n12ll l=60n w=130n
-mp20 q    a    vcc  vccnw p12ll l=60n w=150n
-mn21 q    ck   net3 gnd   n12ll l=60n w=130n
-mn22 net3 a    gnd  gnd   n12ll l=60n w=130n
+mp00 net1 qb vcc  vccnw p12ll l=60n w=150n
+mp01 b    ck net1 vccnw p12ll l=60n w=150n
+mn02 b    qb gnd  gnd   n12ll l=60n w=130n
+mp10 a    ck vcc  vccnw p12ll l=60n w=150n
+mn11 a    b  net2 gnd   n12ll l=60n w=130n
+mn12 net2 ck gnd  gnd   n12ll l=60n w=130n
+mp20 qb   a  vcc  vccnw p12ll l=60n w=150n
+mn21 qb   ck net3 gnd   n12ll l=60n w=130n
+mn22 net3 a  gnd  gnd   n12ll l=60n w=130n
+xq   qb   q  vcc  gnd   vccnw invx1
 .ends
 
-.subckt osc
+.subckt osc8
 + rstb 
 + cal[7] cal[6] cal[5] cal[4] 
 + cal[3] cal[2] cal[1] cal[0] 
-+ clk[7] clk[6] clk[5] clk[4] 
-+ clk[3] clk[2] clk[1] clk[0] 
++ clk[2] clk[1] clk[0] 
 + vcc gnd vccnw 
 xrstbb  rstb  rstbb  vcc gnd vccnw invx1 
 xrstbbb rstbb rstbbb vcc gnd vccnw invx1 
 xclkbb  s0    rstbbb q   qb  vcc   gnd       vccnw srlahx0
 xs0     qb    s0     vcc gnd vccnw schmittx1 
-xclk    s0    clk    vcc gnd vccnw invx1 
 xc1 
 + qb
 + cal[7] cal[6] cal[5] cal[4] 
 + cal[3] cal[2] cal[1] cal[0] 
 + vcc gnd vccnw 
-+ varcap
-xclk7b clk6b clk7b vcc gnd vccnw tspcfreqdiv
-xclk6b clk5b clk6b vcc gnd vccnw tspcfreqdiv
-xclk5b clk4b clk5b vcc gnd vccnw tspcfreqdiv
-xclk4b clk3b clk4b vcc gnd vccnw tspcfreqdiv
-xclk3b clk2b clk3b vcc gnd vccnw tspcfreqdiv
-xclk2b clk1b clk2b vcc gnd vccnw tspcfreqdiv
-xclk1b clk0b clk1b vcc gnd vccnw tspcfreqdiv
-xclk0b clk   clk0b vcc gnd vccnw tspcfreqdiv
-xclk[7] clk7b clk[7] vcc gnd vccnw invx1 
-xclk[6] clk6b clk[6] vcc gnd vccnw invx1 
-xclk[5] clk5b clk[5] vcc gnd vccnw invx1 
-xclk[4] clk4b clk[4] vcc gnd vccnw invx1 
-xclk[3] clk3b clk[3] vcc gnd vccnw invx1 
-xclk[2] clk2b clk[2] vcc gnd vccnw invx1 
-xclk[1] clk1b clk[1] vcc gnd vccnw invx1 
-xclk[0] clk0b clk[0] vcc gnd vccnw invx1 
++ varcap8
+xclk0b  rstb  s0     clk0b vcc gnd   vccnw       and2x1 
+xclk[0] clk0b clk[0] vcc   gnd vccnw invx1 
+xs1     clk0b s1     vcc   gnd vccnw tspcfreqdiv
+xclk1b  rstb  s1     clk1b vcc gnd   vccnw       and2x1 
+xclk[1] clk1b clk[1] vcc   gnd vccnw invx1 
+xs2     clk1b s2     vcc   gnd vccnw tspcfreqdiv
+xclk2b  rstb  s2     clk2b vcc gnd   vccnw       and2x1 
+xclk[2] clk2b clk[2] vcc   gnd vccnw invx1 
 .ends
 
-.subckt osc_cosim 
+.subckt osc8_cosim 
 + rstb 
 + cal[7] cal[6] cal[5] cal[4] 
 + cal[3] cal[2] cal[1] cal[0] 
-+ clk[7] clk[6] clk[5] clk[4] 
-+ clk[3] clk[2] clk[1] clk[0] 
++ clk[2] clk[1] clk[0] 
 x1
 + rstb 
 + cal[7] cal[6] cal[5] cal[4] 
 + cal[3] cal[2] cal[1] cal[0] 
-+ clk[7] clk[6] clk[5] clk[4] 
-+ clk[3] clk[2] clk[1] clk[0] 
++ clk[2] clk[1] clk[0] 
 + vcc gnd vccnw 
-+ osc
-vgnd gnd 0 0
-vvcc vcc gnd 1.2
-vvccnw vccnw 0 1.2
++ osc8
 .ends
 
 *tb
-.option post=2
-.probe i(*) v(*)
 x1
 + rstb 
 + cal[7] cal[6] cal[5] cal[4] 
 + cal[3] cal[2] cal[1] cal[0] 
-+ clk[7] clk[6] clk[5] clk[4] 
-+ clk[3] clk[2] clk[1] clk[0] 
++ x1clk[2] x1clk[1] x1clk[0] 
 + vcc gnd vccnw 
-+ osc
++ osc8
 vrstb rstb gnd dc=0 pwl 
 + 0n 0.0
 + 100n 0.0
 + 101n 1.2
-vgnd gnd 0 0
-vvcc vcc gnd dc=0 pwl
-+ 0n 0.0
-+ 50n 1.2
-vvccnw vccnw 0 1.2
 vcal[7] cal[7] gnd pulse 0 1.2 0 50p 50p 10u*128 10u*256
 vcal[6] cal[6] gnd pulse 0 1.2 0 50p 50p 10u*64  10u*128
 vcal[5] cal[5] gnd pulse 0 1.2 0 50p 50p 10u*32  10u*64
@@ -173,13 +159,14 @@ vcal[3] cal[3] gnd pulse 0 1.2 0 50p 50p 10u*8   10u*16
 vcal[2] cal[2] gnd pulse 0 1.2 0 50p 50p 10u*4   10u*8
 vcal[1] cal[1] gnd pulse 0 1.2 0 50p 50p 10u*2   10u*4
 vcal[0] cal[0] gnd pulse 0 1.2 0 50p 50p 10u*1   10u*2
-cclk[7] clk[7] gnd 0.69f*1
-cclk[6] clk[6] gnd 0.69f*1
-cclk[5] clk[5] gnd 0.69f*1
-cclk[4] clk[4] gnd 0.69f*1
-cclk[3] clk[3] gnd 0.69f*1
-cclk[2] clk[2] gnd 0.69f*1
-cclk[1] clk[1] gnd 0.69f*1
-cclk[0] clk[0] gnd 0.69f*1
+cx1clk[2] x1clk[2] gnd 0.69f*1
+cx1clk[1] x1clk[1] gnd 0.69f*1
+cx1clk[0] x1clk[0] gnd 0.69f*1
 .tran 1p 10u*256*2
+vgnd gnd 0 0
+vvcc vcc gnd dc=0 pwl 0n 0.0 50n 1.2
+vvccnw vccnw 0 1.2
+.option post=2
+.global gnd vcc vccnw
+.probe v(*) i(*)
 .end
