@@ -3,15 +3,15 @@
 
 module freq_trim (
   output reg done, 
-  output reg [15:0] trim, 
+  output reg [15:0] trim, ocnt, 
   input [3:0] msb, 
   input [15:0] rdiv, odiv, // odiv/rdiv=oclk/rclk 
-  input setb, 
+  input setb, ena, 
   input rstb, rclk, oclk 
 );
 
 reg [3:0] sb;
-reg [15:0] rcnt, ocnt;
+reg [15:0] rcnt;
 wire req = rcnt==16'h0;
 wire oeq = ocnt==16'h0;
 reg ph;
@@ -42,9 +42,11 @@ always@(negedge rstb or posedge rclk) begin
 end
 always@(negedge rstb or posedge oclk) begin
   if(~rstb) ocnt <= 16'h0;
-  else if(~setb) ocnt <= odiv;
-  else if(oph_x) ocnt <= odiv;
-  else if(~oeq) ocnt <= ocnt-16'h1;
+  else if((~setb) && ena) ocnt <= odiv;
+  else if((~setb) && (~ena)) ocnt <= 16'h0;
+  else if(oph_x && ena) ocnt <= odiv;
+  else if((~oeq) && ena) ocnt <= ocnt-16'h1;
+  else if(setb && (~done) && (~ena)) ocnt <= ocnt+16'h1;
 end
 always@(negedge rstb or posedge oclk) begin
   if(~rstb) begin
@@ -53,8 +55,8 @@ always@(negedge rstb or posedge oclk) begin
   end
   else if(~setb) begin
     done <= 1'b0;
-    sb <= msb;
-    trim <= (1<<msb);
+    sb <= ena ? msb : 4'h0;
+    if(ena) trim <= (1<<msb);
   end
   else if(oph_x && (~done)) begin
     if(sb==4'h0) begin
@@ -105,6 +107,7 @@ reg rclk;
 initial rclk='b0;
 always #20.833333333333337 rclk = ~rclk;
 reg [15:0] rdiv, odiv;
+wire [15:0] ocnt;
 wire [15:0] odivm[0:7];
 assign odivm[0] = rdiv*8/24;
 assign odivm[1] = rdiv*4/24;
@@ -113,14 +116,14 @@ assign odivm[3] = rdiv*8/24;
 assign odivm[4] = rdiv*4/24;
 assign odivm[5] = rdiv*2/24;
 reg [3:0] msb;
-reg setb;
+reg setb, ena;
 
 freq_trim u_req_trim (
   .done(done), 
-  .trim(trim), 
+  .trim(trim), .ocnt(ocnt), 
   .msb(msb), 
   .rdiv(rdiv), .odiv(odivm[clk_sel]),
-  .setb(setb), 
+  .setb(setb), .ena(ena), 
   .rstb(rstb), .rclk(rclk), .oclk(oclkm[clk_sel]) 
 );
 
@@ -139,7 +142,7 @@ end
 real rclk_time_d[0:1];
 real oclk_time_d[0:1];
 real rclk_period, oclk_period;
-real rclk_freq, oclk_freq;
+real rclk_freq, oclk_freq, mclk_freq;
 
 always@(negedge rstb or posedge rclk) begin
   if(~rstb) begin
@@ -167,6 +170,8 @@ always@(negedge rstb or posedge oclkm[clk_sel]) begin
   end
 end
 
+always@(*) if(~ena) mclk_freq = rclk_freq*(1.0*ocnt)/(1.0*rdiv);
+
 initial begin
   `ifdef FST
   $dumpfile("a.fst");
@@ -180,6 +185,7 @@ initial begin
   rstb = 0;
   setb = 0;
   rdiv = 8'd92;
+  ena = 0;
   repeat(10) begin
     rdiv = $urandom_range(16'h0007,16'h00ff);
     $write("rdiv=%d, odivm[0]=%d, odivm[1]=%d, odivm[2]=%d\n",rdiv,odivm[0],odivm[1],odivm[2]);
@@ -192,6 +198,12 @@ initial begin
         for(clk_sel=0;clk_sel<=2;clk_sel=clk_sel+1) begin
           #10000 rstb = 1;
           msb = 7;
+          ena = 0;
+          #10000 setb = 1;
+          @(posedge done);
+          $write("measure done\n", mclk_freq);
+          #10000 setb = 0; 
+		  #10000 ena = 1;
           #10000 setb = 1;
           @(posedge done);
           $write("clk_sel=%x, trim done\n", clk_sel);
@@ -201,6 +213,12 @@ initial begin
         for(clk_sel=3;clk_sel<=5;clk_sel=clk_sel+1) begin
           #10000 rstb = 1;
           msb = 11;
+          ena = 0;
+          #10000 setb = 1;
+          @(posedge done);
+          $write("measure done\n", mclk_freq);
+          #10000 setb = 0;
+          #10000 ena = 1;
           #10000 setb = 1;
           @(posedge done);
           $write("clk_sel=%x, trim done\n", clk_sel);
