@@ -1,6 +1,5 @@
 void boot() {
-  __asm__("la  sp,  __stack_pointer");
-  __asm__("la  gp,  __global_pointer");
+  __asm__("li sp, 0xf8");
   __asm__("jal main");
 }
 #define RAM_A0 0x0
@@ -16,22 +15,21 @@ volatile unsigned int *const lpuart_data = (unsigned int *)(APB_UART_A0+0x8);
 volatile unsigned int *const lpuart_fifo = (unsigned int *)(APB_UART_A0+0xc);
 #define APB_UART_A1 (APB_UART_A0+0xc)
 void wait_timer(){ while((*timer_ctrl & (0x1<<6)) == 0x0); }
-void main() {
+void test_vanilla_mode (char* b){
   int k;
-  char b[10] = "shit! 123#";
-  *lpuart_ctrl = *lpuart_ctrl | (0x1<<6) | (0x1<<2);
-  *lpuart_ctrl = *lpuart_ctrl | (0x1<<0);
-  // vanilla mode 
-  *timer_cntr = 0x15;
+  *timer_cntr = 0xc;
   *timer_ctrl = 0x0;
   *timer_ctrl = *timer_ctrl | (0x1<<0);
-  for(k=0;k<10;k++) {
+  k=0;
+  while(k<10) {
     wait_timer();
     *timer_ctrl = *timer_ctrl | (0x1<<6);
-    *lpuart_data = 0x7f & b[k];
+    *lpuart_data = 0x7f & b[k++];
   }
   *timer_ctrl = *timer_ctrl &~(0x1<<0);
-  // one-shot mode 
+}
+void test_one_shot_mode (char* b){
+  int k;
   *timer_cntr = 0x8;
   *timer_ctrl = 0x0;
   *timer_ctrl = *timer_ctrl | (0x1<<2);
@@ -43,8 +41,10 @@ void main() {
     *timer_ctrl = *timer_ctrl | (0x1<<0);
   }
   *timer_ctrl = *timer_ctrl &~(0x1<<0);
-  // free-run mode 
-  *timer_cntr = 0xc;
+}
+void test_free_run_mode (char* b){
+  int k;
+  *timer_cntr = 0x1c;
   *timer_ctrl = 0x0;
   *timer_ctrl = *timer_ctrl | (0x1<<3);
   *timer_ctrl = *timer_ctrl | (0x1<<0);
@@ -54,4 +54,15 @@ void main() {
     *lpuart_data = 0x7f & b[k];
   }
   *timer_ctrl = *timer_ctrl &~(0x1<<0);
+}
+void main() {
+  int k;
+  char b[10] = "shit! 123#";
+  *lpuart_ctrl = *lpuart_ctrl | (0x1<<6) | (0x1<<2);
+  *lpuart_ctrl = *lpuart_ctrl | (0x1<<0);
+  for(k=0;k<3;k++){
+    test_vanilla_mode(b);
+    test_one_shot_mode(b); 
+    test_free_run_mode(b); 
+  }
 }
