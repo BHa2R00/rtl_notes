@@ -2,7 +2,7 @@
 
 
 `define LPTIMER_USE_LOCK 1'b0 
-`define LPTIMER_INC_MODE 1'b0
+`define LPTIMER_INC_MODE 1'b1
 module timer ( // u_timer slave 532
   output irq, 
   input halt, 
@@ -242,7 +242,7 @@ end
 always@(negedge rstb or posedge clk) begin
   if(~rstb) a <= 4'hb;
   else if((~setb)||clear_p) a <= 4'hb;
-  else if(setb && uclk_n) a <= na;
+  else if(setb && uclk_n && (~fclear_p)) a <= na;
 end
 always@(*) begin
   na = a;
@@ -283,7 +283,7 @@ always@(negedge rstb or posedge clk) begin
   end
 end
 
-assign intr = ena_tx? (cnt>=th):(th>=cnt);
+assign intr = ena_tx? (th>=cnt):(cnt>=th);
 
 endmodule
 
@@ -329,6 +329,8 @@ wire nxt_irq =
   (full_ena && full)||
   (empty_ena && empty)||
   (intr_ena && intr);
+reg [1:0] nxt_irq_d;
+wire nxt_irq_p = nxt_irq_d == 2'b01;
 reg clear_irq;
 
 lpuart u_lpuart (
@@ -355,11 +357,13 @@ always@(negedge prstb or posedge pclk) begin
   if(~prstb) begin
     dma_ack_d <= 2'b11;
     dma_req <= 1'b0;
+    nxt_irq_d <= 2'b11;
   end
   else begin
     dma_ack_d <= {dma_ack_d[0],dma_ack};
     if(dma_ack_p) dma_req <= 1'b0;
     else if(intr) dma_req <= 1'b1;
+    nxt_irq_d <= {nxt_irq_d[0],nxt_irq};
   end
 end
 
@@ -417,7 +421,7 @@ always@(negedge prstb or posedge pclk) begin
     wire_stop_ena <= 'h0;
     clear_irq <= 'h0;
     dividend <= 'h7ffe;
-    divisor <= 'h0755;
+    divisor <= 'h075f;
     // replace wchar[9:0] bchar[9:0] 
     wchar <= 'h0;
     th <= 'h0;
@@ -452,8 +456,8 @@ end
 always@(negedge prstb or posedge pclk) begin
   if(~prstb) irq <= 'h0;
   else begin
-    if(clear_irq && irq) irq <= 'h0;
-    else irq <= nxt_irq;
+    if(clear_irq) irq <= 'h0;
+    else if(nxt_irq_p) irq <= 'h1;
   end
 end
 assign push = data_ena && pwrite && psel && penable;
@@ -747,7 +751,7 @@ task load_rom;
   begin
     $write("load_rom from 67.bin\n");
 /*
-riscv32-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostartfiles -mno-relax -O0 -c 67.c
+riscv32-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostartfiles -mno-relax -O4 -c 67.c
 riscv32-unknown-elf-ld -T 67.ld -o 67.elf 67.o
 riscv32-unknown-elf-objcopy -O binary 67.elf 67.bin
 riscv32-unknown-elf-objdump -D 67.elf 
