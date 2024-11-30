@@ -34,6 +34,36 @@ assign lck = |(vld&clk);
 endmodule
 
 
+/*module sdio (
+  output [3:0] dato, 
+  input [3:0] dati, 
+  output datoe, 
+  input oneline, 
+  output reg [7:0] rchar, 
+  input [7:0] wchar, 
+  input clear, push, pop, 
+  output reg [131:0] rrsp, 
+  input [131:0] wrsp, 
+  output reg [43:0] rcmd, 
+  input [43:0] wcmd, 
+  output cmdo, 
+  input cmdi, 
+  output cmdoe, 
+  input even, 
+  output reg sclko, 
+  input sclki, 
+  output reg sclkoe, 
+  input [15:0] dividend, divisior, 
+  input fclk, 
+  input setb, 
+  input rstb, clk 
+);
+
+wire sclk = sclkoe ? sclko : sclki;
+
+endmodule*/
+
+
 module hduart #(
   parameter HDUART_CHECK_SB  = 9, 
   parameter HDUART_FIFO_AMSB = 4, 
@@ -51,7 +81,7 @@ module hduart #(
   input parity, even, 
   input smsb,         // stop msb
   input [3:0] cmsb,   // char msb
-  output reg [3:0] bs, 
+  output reg [3:0] sb, 
   output reg uclk, 
   input [3:0] delay, 
   input [15:0] divisor, dividend, 
@@ -102,12 +132,12 @@ always@(negedge rstb or posedge clk) begin
     clear_d <= {clear_d[0],clear};
   end
 end
-wire [3:0]   idlebit = bs - 4'd0;
-wire [3:0]  startbit = bs - 4'd1;
-wire [3:0]   charbit = bs - 4'd2;
-wire [3:0] paritybit = bs - (4'd3 + cmsb);
-wire [3:0]   stopbit = bs - (4'd3 + cmsb + (parity ? 4'd1 : 4'd0));
-wire [3:0]    endbit = bs - (4'd3 + cmsb + (parity ? 4'd1 : 4'd0));
+wire [3:0]   idlebit = sb - 4'd0;
+wire [3:0]  startbit = sb - 4'd1;
+wire [3:0]   charbit = sb - 4'd2;
+wire [3:0] paritybit = sb - (4'd3 + cmsb);
+wire [3:0]   stopbit = sb - (4'd3 + cmsb + (parity ? 4'd1 : 4'd0));
+wire [3:0]    endbit = sb - (4'd3 + cmsb + (parity ? 4'd1 : 4'd0));
 wire     idleena = ( 4'd0       ==   idlebit);
 assign  startena = ( 4'd0       ==  startbit);
 wire     charena = ( cmsb       >=   charbit) && (charbit >= 4'd0);
@@ -130,30 +160,30 @@ assign tx =
   1'b1;
 always@(negedge rstb or posedge clk) begin
   if(~rstb) begin
-    bs <= 4'd0;
+    sb <= 4'd0;
     uclkena <= 1'b0;
     bx <= 1'b0;
   end
   else if(setb && (txe || rxe)) begin
     if(idleena) begin
       if(({txe,empty} == 2'b10) || ({rxe,full,rx} == 3'b100)) begin
-        bs <= 4'd1;
+        sb <= 4'd1;
         uclkena <= 1'b1;
         if(checkena) bx <= even;
       end
     end
     else if(uclk_n) begin
       if(endena) begin
-        bs <= 4'd0;
+        sb <= 4'd0;
         uclkena <= 1'b0;
       end
-      else bs <= bs + 4'd1;
-      bs <= endena ? 4'd0 : bs + 4'd1;
+      else sb <= sb + 4'd1;
+      sb <= endena ? 4'd0 : sb + 4'd1;
     end
     else if(uclk_p && checkena && charena) bx <= bx ^ (txe ? tx : rx);
   end
   else begin
-    bs <= 4'd0;
+    sb <= 4'd0;
     uclkena <= 1'b0;
   end
 end
@@ -183,6 +213,51 @@ always@(posedge clk) begin
 end
 assign rchar = mem[ma0[(HDUART_FIFO_AMSB-1):0]];
 assign match = endena && (mchar == mem[ma1[(HDUART_FIFO_AMSB-1):0]]);
+
+endmodule
+
+
+module hduartbist #(
+  parameter HDUARTBIST_AMSB = 3, 
+  parameter HDUARTBIST_DMSB = 8 
+)(
+  output loopcheck, 
+  output reg loopend, 
+  input [HDUARTBIST_DMSB:0] wchar, rchar, 
+  input loopback, stop, 
+  input rstb, clk 
+);
+
+reg [1:0] stop_d;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) stop_d <= 2'b00;
+  else stop_d <= {stop_d[0],stop};
+end
+wire stop_n = stop_d == 2'b10;
+reg loopcheck1;
+reg [HDUARTBIST_AMSB:0] loopcnt;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    loopcheck1 <= 1'b1;
+    loopcnt <= 'd0;
+    loopend <= 1'b0;
+  end
+  else if(loopback) begin
+    if(stop_n) begin
+      if(&loopcnt) loopend <= 1'b1;
+      else begin
+        loopcnt <= loopcnt + 'd1;
+        loopcheck1 <= loopcheck1 && (loopcnt[0] ? rchar : ~rchar) == wchar;
+      end
+    end
+  end
+  else begin
+    loopcheck1 <= 1'b1;
+    loopcnt <= 'd0;
+    loopend <= 1'b0;
+  end
+end
+assign loopcheck = &{loopcnt,loopcheck1};
 
 endmodule
 
@@ -220,18 +295,11 @@ reg trig;
 reg enadma;
 wire nxt_trig = txe ? (th >= cnt) : rxe ? (cnt >= th) : 1'b0;
 assign dma_req = enadma && nxt_trig;
-reg [1:0] trig_d, stop_d;
+reg [1:0] trig_d;
 wire trig_p = trig_d == 2'b01;
-wire stop_n = stop_d == 2'b10;
 always@(negedge prstb or posedge pclk) begin
-  if(~prstb) begin
-    trig_d <= 2'b00;
-    stop_d <= 2'b00;
-  end
-  else begin
-    trig_d <= {trig_d[0],nxt_trig};
-    stop_d <= {stop_d[0],stop};
-  end
+  if(~prstb) trig_d <= 2'b00;
+  else trig_d <= {trig_d[0],nxt_trig};
 end
 wire [9:0] rchar;
 reg [9:0] wchar, mchar;
@@ -241,7 +309,7 @@ reg clear;
 reg parity, even;
 reg smsb;
 reg [3:0] cmsb;
-wire [3:0] bs;
+wire [3:0] sb;
 wire uclk;
 reg [3:0] delay;
 reg [15:0] divisor, dividend;
@@ -265,36 +333,23 @@ clksw u_clk(
   .sel(clk_sel), 
   .rstb({frstb,prstb}), .clk({fclk,pclk}) 
 );
-reg loopback, loopcheck1, loopend;
-reg [3:0] loopcnt;
-always@(negedge prstb or posedge pclk) begin
-  if(~prstb) begin
-    loopcheck1 <= 1'b1;
-    loopcnt <= 4'd0;
-    loopend <= 1'b0;
-  end
-  else if(setb && loopback) begin
-    if(stop_n) begin
-      if(loopcnt == 4'hf) loopend <= 1'b1;
-      else begin
-        loopcnt <= loopcnt + 4'd1;
-        loopcheck1 <= loopcheck1 && (loopcnt[0] ? rchar[8:0] : ~rchar[8:0]) == wchar[8:0];
-      end
-    end
-  end
-  else begin
-    loopcheck1 <= 1'b1;
-    loopcnt <= 4'd0;
-    loopend <= 1'b0;
-  end
-end
-wire loopcheck = (loopcnt == 4'hf) && loopcheck1;
-
+reg loopback;
+wire loopend, loopcheck;
+hduartbist #(
+  .HDUARTBIST_AMSB(3), 
+  .HDUARTBIST_DMSB(8)
+) u_hduartbist (
+  .loopcheck(loopcheck), 
+  .loopend(loopend), 
+  .wchar(wchar[8:0]), .rchar(rchar[8:0]), 
+  .loopback(loopback), .stop(stop), 
+  .rstb(prstb), .clk(pclk) 
+);
 hduart #(
   .HDUART_CHECK_SB(9), 
   .HDUART_FIFO_AMSB(4), 
   .HDUART_FIFO_DMSB(9) 
-) u_hduart(
+) u_hduart (
   .startena(start), .stopena(stop), .match(match), 
   .full(full), .empty(empty), 
   .cnt(cnt), 
@@ -307,7 +362,7 @@ hduart #(
   .parity(parity), .even(even), 
   .smsb(smsb),
   .cmsb(cmsb),
-  .bs(bs), 
+  .sb(sb), 
   .uclk(uclk), 
   .delay(delay), 
   .divisor(divisor), .dividend(dividend), 
@@ -381,8 +436,8 @@ always@(negedge prstb or posedge pclk) begin
     irqena_stop  <= 'h0;
     irqena_match <= 'h0;
     delay[3:0]   <= 'h0;
-    dividend[15:0] <= 'h7ffe;
-    divisor[15:0]  <= 'h0754;
+    dividend[15:0] <= 'h4004;
+    divisor[15:0]  <= 'h03b1;
     wchar[9:0] <= 'h0;
     mchar[9:0] <= 'h0;
     th[3:0]  <= 'h0;
@@ -427,7 +482,7 @@ always@(negedge prstb or posedge pclk) begin
     if(trig_p) trig <= 1'b1;
   end
 end
-assign debug[3:0] = bs[3:0];
+assign debug[3:0] = sb[3:0];
 assign debug[4] = uclk;
 
 endmodule
@@ -497,7 +552,7 @@ module rv32im (
 );
 
 assign idle = (pc >= pc1) || (pc0 > pc1);
-reg [31:0] x[1:31];
+reg [31:0] mem[1:31];
 wire [6:0] opcode = inst[6:0];
 wire fmtr   = (opcode == 7'b0110011);
 wire fmti   = (opcode == 7'b0010011);
@@ -573,8 +628,8 @@ wire i_auipc  = fmtup;
 assign busreq = (fmtil || fmts);
 assign write = fmts && grant;
 assign sel = busreq && grant;
-wire [31:0] xrs1 = (rs1==5'd0)? 32'd0:x[rs1];
-wire [31:0] xrs2 = (rs2==5'd0)? 32'd0:x[rs2];
+wire [31:0] xrs1 = (rs1==5'd0)? 32'd0:mem[rs1];
+wire [31:0] xrs2 = (rs2==5'd0)? 32'd0:mem[rs2];
 wire xrs1s = xrs1[31];
 wire xrs2s = xrs2[31];
 wire imms = imm[31];
@@ -668,14 +723,14 @@ wire load = {sel,write,enable} == 3'b100;
 wire loaded = {sel,write,enable,ready} == 4'b1011;
 wire store = {sel,write,enable} == 3'b110;
 wire stored = {sel,write,enable,ready} == 4'b1111;
-reg [5:0] x_i;
+//reg [5:0] mem_i;
 assign addr = xrs1 + imm;
 always@(negedge rstb or posedge clk) begin
   if(~rstb) begin
     wdata <= 32'd0;
     enable <= 1'b0;
     pc <= 32'd0;
-    for(x_i=0;x_i<=31;x_i=x_i+1) x[x_i] <= 32'd0;
+    //for(mem_i=0;mem_i<=31;mem_i=mem_i+1) mem[mem_i] <= 32'd0;
   end
   else if(setb && instp) begin
     if(load) begin
@@ -683,7 +738,7 @@ always@(negedge rstb or posedge clk) begin
     end
     else if(loaded && unlock) begin
       enable <= 1'b0;
-      if((rd != 5'd0) && (~i_nop)) x[rd] <= xrd;
+      if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
       if(fetch) pc <= npc;
     end
     else if(store) begin
@@ -697,7 +752,389 @@ always@(negedge rstb or posedge clk) begin
       if(fetch) pc <= npc;
     end
     else if(unlock) begin
-      if((rd != 5'd0) && (~i_nop)) x[rd] <= xrd;
+      if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
+      if(fetch) pc <= npc;
+    end
+  end
+  else pc <= pc0;
+end
+
+endmodule
+
+
+module rv32i (
+  input [31:0] rdata, 
+  output reg [31:0] wdata, 
+  output reg enable, 
+  output write, sel, busreq, 
+  input ready, grant, 
+  output [31:0] addr, 
+  output idle, 
+  input [31:0] inst, 
+  output reg [31:0] pc, 
+  input [31:0] pc0, pc1, 
+  input setb, fetch, 
+  input rstb, clk 
+);
+
+assign idle = (pc >= pc1) || (pc0 > pc1);
+reg [31:0] mem[1:31];
+wire [6:0] opcode = inst[6:0];
+wire fmtr   = (opcode == 7'b0110011);
+wire fmti   = (opcode == 7'b0010011);
+wire fmtil  = (opcode == 7'b0000011);
+wire fmts   = (opcode == 7'b0100011);
+wire fmtb   = (opcode == 7'b1100011);
+wire fmtj   = (opcode == 7'b1101111);
+wire fmtijr = (opcode == 7'b1100111);
+wire fmtu   = (opcode == 7'b0110111);
+wire fmtup  = (opcode == 7'b0010111);
+//wire fmtie  = (opcode == 7'b1110011);
+wire [2:0] funct3 = inst[14:12];
+wire [6:0] funct7 = inst[31:25];
+wire [4:0] rd  = (|{fmtr,fmti,fmtil,fmtu,fmtup,fmtj,fmtijr})? inst[11:7]:5'd0;
+wire [4:0] rs1 = (|{fmtr,fmti,fmtil,fmts,fmtb,fmtijr})? inst[19:15]:5'd0;
+wire [4:0] rs2 = (|{fmtr,fmts,fmtb})? inst[24:20]:5'd0;
+wire [31:0] imm = 
+  (fmti || fmtil || fmtijr)? {{20{inst[31]}},inst[31:20]}:
+  fmts? {{20{inst[31]}},inst[31:25],inst[11:7]}:
+  fmtb? {{19{inst[31]}},inst[31],inst[7],inst[30:25],inst[11:8],1'b0}:
+  (fmtu || fmtup)? {inst[31:12],12'd0}:
+  fmtj? {{12{inst[31]}},inst[31],inst[19:12],inst[20],inst[30:21],1'b0}:
+  32'd0;
+wire instp = inst[1:0] == 2'b11;
+wire i_nop    = fmti   && (~|inst[31:7]);
+wire i_add    = fmtr   && (funct3==3'h0) && (funct7==7'h00);
+wire i_sub    = fmtr   && (funct3==3'h0) && (funct7==7'h20);
+wire i_xor    = fmtr   && (funct3==3'h4) && (funct7==7'h00);
+wire i_or     = fmtr   && (funct3==3'h6) && (funct7==7'h00);
+wire i_and    = fmtr   && (funct3==3'h7) && (funct7==7'h00);
+wire i_sll    = fmtr   && (funct3==3'h1) && (funct7==7'h00);
+wire i_srl    = fmtr   && (funct3==3'h5) && (funct7==7'h00);
+wire i_sra    = fmtr   && (funct3==3'h5) && (funct7==7'h20);
+wire i_slt    = fmtr   && (funct3==3'h2) && (funct7==7'h00);
+wire i_sltu   = fmtr   && (funct3==3'h3) && (funct7==7'h00);
+wire i_addi   = fmti   && (funct3==3'h0);
+wire i_xori   = fmti   && (funct3==3'h4);
+wire i_ori    = fmti   && (funct3==3'h6);
+wire i_andi   = fmti   && (funct3==3'h7);
+wire i_slli   = fmti   && (funct3==3'h1) && (imm[11:5]==7'h00);
+wire i_srli   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h00);
+wire i_srai   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h20);
+wire i_slti   = fmti   && (funct3==3'h2);
+wire i_sltiu  = fmti   && (funct3==3'h3);
+wire i_lb     = fmtil  && (funct3==3'h0);
+wire i_lh     = fmtil  && (funct3==3'h1);
+wire i_lw     = fmtil  && (funct3==3'h2);
+wire i_lbu    = fmtil  && (funct3==3'h4);
+wire i_lhu    = fmtil  && (funct3==3'h5);
+wire i_sb     = fmts   && (funct3==3'h0);
+wire i_sh     = fmts   && (funct3==3'h1);
+wire i_sw     = fmts   && (funct3==3'h2);
+wire i_beq    = fmtb   && (funct3==3'h0);
+wire i_bne    = fmtb   && (funct3==3'h1);
+wire i_blt    = fmtb   && (funct3==3'h4);
+wire i_bge    = fmtb   && (funct3==3'h5);
+wire i_bltu   = fmtb   && (funct3==3'h6);
+wire i_bgeu   = fmtb   && (funct3==3'h7);
+wire i_jal    = fmtj;
+wire i_jalr   = fmtijr && (funct3==3'h0);
+wire i_lui    = fmtu;
+wire i_auipc  = fmtup;
+//wire i_ecall  = fmtie  && (funct3==3'h0) && (funct7==7'h0);
+//wire i_ebreak = fmtie  && (funct3==3'h0) && (funct7==7'h1);
+assign busreq = (fmtil || fmts);
+assign write = fmts && grant;
+assign sel = busreq && grant;
+wire [31:0] xrs1 = (rs1==5'd0)? 32'd0:mem[rs1];
+wire [31:0] xrs2 = (rs2==5'd0)? 32'd0:mem[rs2];
+wire xrs1s = xrs1[31];
+wire xrs2s = xrs2[31];
+wire imms = imm[31];
+wire [31:0] xrs1u = xrs1s? ((~xrs1) + 32'd1):xrs1;
+wire [31:0] xrs2u = xrs2s? ((~xrs2) + 32'd1):xrs2;
+wire [31:0] immu = imms? ((~imm) + 32'd1):imm;
+wire ltu = xrs1u < xrs2u;
+wire geu = ~ltu;
+wire lt = 
+  ({xrs1s,xrs2s}==2'b11) ? ~ltu:
+  ({xrs1s,xrs2s}==2'b10) ? 1'b1:
+  ({xrs1s,xrs2s}==2'b01) ? 1'b0:
+  ltu;
+wire eq = xrs1 == xrs2;
+wire ne = ~eq;
+wire ge = ~lt;
+wire ltiu = xrs1u < immu;
+wire lti = 
+  ({xrs1s,imms}==2'b11)? ~ltiu:
+  ({xrs1s,imms}==2'b10)? 1'b1:
+  ({xrs1s,imms}==2'b01)? 1'b0:
+  ltiu;
+wire [31:0] xrd = 
+  i_add    ? (xrs1 +  xrs2):
+  i_sub    ? (xrs1 +  ~xrs2 + 32'd1):
+  i_xor    ? (xrs1 ^  xrs2):
+  i_or     ? (xrs1 |  xrs2):
+  i_and    ? (xrs1 &  xrs2):
+  i_sll    ? (xrs1 << xrs2[4:0]):
+  i_srl    ? (xrs1 >> xrs2[4:0]):
+  i_sra    ? (xrs1s? (~((~xrs1) >> xrs2[4:0])):(xrs1 >> xrs2[4:0])):
+  i_slt    ? (lt? 32'd1:32'd0):
+  i_sltu   ? (ltu? 32'd1:32'd0):
+  i_addi   ? (xrs1 +  imm):
+  i_xori   ? (xrs1 ^  imm):
+  i_ori    ? (xrs1 |  imm):
+  i_andi   ? (xrs1 &  imm):
+  i_slli   ? (xrs1 << imm[4:0]):
+  i_srli   ? (xrs1 >> imm[4:0]):
+  i_srai   ? (xrs1s? (~((~xrs1) >> imm[4:0])):(xrs1 >> imm[4:0])):
+  i_slti   ? (lti? 32'd1:32'd0):
+  i_sltiu  ? (ltiu? 32'd1:32'd0):
+  i_jal    ? (pc + 32'd4):
+  i_jalr   ? (pc + 32'd4):
+  i_lui    ? imm:
+  i_auipc  ? (pc + imm):
+  i_lb     ? ({{24{rdata[7]}},rdata[7:0]}):
+  i_lh     ? ({{16{rdata[15]}},rdata[15:0]}):
+  i_lw     ? (rdata[31:0]):
+  i_lbu    ? ({{24{1'b0}},rdata[7:0]}):
+  i_lhu    ? ({{16{1'b0}},rdata[15:0]}):
+  32'd0;
+wire [31:0] npc = 
+  (i_jal ) ? (pc + imm):
+  (i_jalr) ? (xrs1 + imm):
+  (i_bgeu && geu) ? (pc + imm):
+  (i_bltu && ltu) ? (pc + imm):
+  (i_bge  && ge ) ? (pc + imm):
+  (i_blt  && lt ) ? (pc + imm):
+  (i_bne  && ne ) ? (pc + imm):
+  (i_beq  && eq ) ? (pc + imm):
+  pc + 32'd4;
+wire load = {sel,write,enable} == 3'b100;
+wire loaded = {sel,write,enable,ready} == 4'b1011;
+wire store = {sel,write,enable} == 3'b110;
+wire stored = {sel,write,enable,ready} == 4'b1111;
+//reg [5:0] mem_i;
+assign addr = xrs1 + imm;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    wdata <= 32'd0;
+    enable <= 1'b0;
+    pc <= 32'd0;
+    //for(mem_i=0;mem_i<=31;mem_i=mem_i+1) mem[mem_i] <= 32'd0;
+  end
+  else if(setb && instp) begin
+    if(load) begin
+      enable <= 1'b1;
+    end
+    else if(loaded) begin
+      enable <= 1'b0;
+      if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
+      if(fetch) pc <= npc;
+    end
+    else if(store) begin
+      enable <= 1'b1;
+      if(i_sb) wdata[31:0] <= {rdata[31:8],xrs2[7:0]};
+      else if(i_sh) wdata[31:0] <= {rdata[31:16],xrs2[15:0]};
+      else if(i_sw) wdata[31:0] <= xrs2[31:0];
+    end
+    else if(stored) begin
+      enable <= 1'b0;
+      if(fetch) pc <= npc;
+    end
+    else begin
+      if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
+      if(fetch) pc <= npc;
+    end
+  end
+  else pc <= pc0;
+end
+
+endmodule
+
+
+module rv32e (
+  input [31:0] rdata, 
+  output reg [31:0] wdata, 
+  output reg enable, 
+  output write, sel, busreq, 
+  input ready, grant, 
+  output [31:0] addr, 
+  output idle, 
+  input [31:0] inst, 
+  output reg [31:0] pc, 
+  input [31:0] pc0, pc1, 
+  input setb, fetch, 
+  input rstb, clk 
+);
+
+assign idle = (pc >= pc1) || (pc0 > pc1);
+reg [31:0] mem[1:15];
+wire [6:0] opcode = inst[6:0];
+wire fmtr   = (opcode == 7'b0110011);
+wire fmti   = (opcode == 7'b0010011);
+wire fmtil  = (opcode == 7'b0000011);
+wire fmts   = (opcode == 7'b0100011);
+wire fmtb   = (opcode == 7'b1100011);
+wire fmtj   = (opcode == 7'b1101111);
+wire fmtijr = (opcode == 7'b1100111);
+wire fmtu   = (opcode == 7'b0110111);
+wire fmtup  = (opcode == 7'b0010111);
+//wire fmtie  = (opcode == 7'b1110011);
+wire [2:0] funct3 = inst[14:12];
+wire [6:0] funct7 = inst[31:25];
+wire [4:0] rd  = (|{fmtr,fmti,fmtil,fmtu,fmtup,fmtj,fmtijr})? inst[11:7]:5'd0;
+wire [4:0] rs1 = (|{fmtr,fmti,fmtil,fmts,fmtb,fmtijr})? inst[19:15]:5'd0;
+wire [4:0] rs2 = (|{fmtr,fmts,fmtb})? inst[24:20]:5'd0;
+wire [31:0] imm = 
+  (fmti || fmtil || fmtijr)? {{20{inst[31]}},inst[31:20]}:
+  fmts? {{20{inst[31]}},inst[31:25],inst[11:7]}:
+  fmtb? {{19{inst[31]}},inst[31],inst[7],inst[30:25],inst[11:8],1'b0}:
+  (fmtu || fmtup)? {inst[31:12],12'd0}:
+  fmtj? {{12{inst[31]}},inst[31],inst[19:12],inst[20],inst[30:21],1'b0}:
+  32'd0;
+wire instp = inst[1:0] == 2'b11;
+wire i_nop    = fmti   && (~|inst[31:7]);
+wire i_add    = fmtr   && (funct3==3'h0) && (funct7==7'h00);
+wire i_sub    = fmtr   && (funct3==3'h0) && (funct7==7'h20);
+wire i_xor    = fmtr   && (funct3==3'h4) && (funct7==7'h00);
+wire i_or     = fmtr   && (funct3==3'h6) && (funct7==7'h00);
+wire i_and    = fmtr   && (funct3==3'h7) && (funct7==7'h00);
+wire i_sll    = fmtr   && (funct3==3'h1) && (funct7==7'h00);
+wire i_srl    = fmtr   && (funct3==3'h5) && (funct7==7'h00);
+wire i_sra    = fmtr   && (funct3==3'h5) && (funct7==7'h20);
+wire i_slt    = fmtr   && (funct3==3'h2) && (funct7==7'h00);
+wire i_sltu   = fmtr   && (funct3==3'h3) && (funct7==7'h00);
+wire i_addi   = fmti   && (funct3==3'h0);
+wire i_xori   = fmti   && (funct3==3'h4);
+wire i_ori    = fmti   && (funct3==3'h6);
+wire i_andi   = fmti   && (funct3==3'h7);
+wire i_slli   = fmti   && (funct3==3'h1) && (imm[11:5]==7'h00);
+wire i_srli   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h00);
+wire i_srai   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h20);
+wire i_slti   = fmti   && (funct3==3'h2);
+wire i_sltiu  = fmti   && (funct3==3'h3);
+wire i_lb     = fmtil  && (funct3==3'h0);
+wire i_lh     = fmtil  && (funct3==3'h1);
+wire i_lw     = fmtil  && (funct3==3'h2);
+wire i_lbu    = fmtil  && (funct3==3'h4);
+wire i_lhu    = fmtil  && (funct3==3'h5);
+wire i_sb     = fmts   && (funct3==3'h0);
+wire i_sh     = fmts   && (funct3==3'h1);
+wire i_sw     = fmts   && (funct3==3'h2);
+wire i_beq    = fmtb   && (funct3==3'h0);
+wire i_bne    = fmtb   && (funct3==3'h1);
+wire i_blt    = fmtb   && (funct3==3'h4);
+wire i_bge    = fmtb   && (funct3==3'h5);
+wire i_bltu   = fmtb   && (funct3==3'h6);
+wire i_bgeu   = fmtb   && (funct3==3'h7);
+wire i_jal    = fmtj;
+wire i_jalr   = fmtijr && (funct3==3'h0);
+wire i_lui    = fmtu;
+wire i_auipc  = fmtup;
+//wire i_ecall  = fmtie  && (funct3==3'h0) && (funct7==7'h0);
+//wire i_ebreak = fmtie  && (funct3==3'h0) && (funct7==7'h1);
+assign busreq = (fmtil || fmts);
+assign write = fmts && grant;
+assign sel = busreq && grant;
+wire [31:0] xrs1 = (rs1==5'd0)? 32'd0:mem[rs1[3:0]];
+wire [31:0] xrs2 = (rs2==5'd0)? 32'd0:mem[rs2[3:0]];
+wire xrs1s = xrs1[31];
+wire xrs2s = xrs2[31];
+wire imms = imm[31];
+wire [31:0] xrs1u = xrs1s? ((~xrs1) + 32'd1):xrs1;
+wire [31:0] xrs2u = xrs2s? ((~xrs2) + 32'd1):xrs2;
+wire [31:0] immu = imms? ((~imm) + 32'd1):imm;
+wire ltu = xrs1u < xrs2u;
+wire geu = ~ltu;
+wire lt = 
+  ({xrs1s,xrs2s}==2'b11) ? ~ltu:
+  ({xrs1s,xrs2s}==2'b10) ? 1'b1:
+  ({xrs1s,xrs2s}==2'b01) ? 1'b0:
+  ltu;
+wire eq = xrs1 == xrs2;
+wire ne = ~eq;
+wire ge = ~lt;
+wire ltiu = xrs1u < immu;
+wire lti = 
+  ({xrs1s,imms}==2'b11)? ~ltiu:
+  ({xrs1s,imms}==2'b10)? 1'b1:
+  ({xrs1s,imms}==2'b01)? 1'b0:
+  ltiu;
+wire [31:0] xrd = 
+  i_add    ? (xrs1 +  xrs2):
+  i_sub    ? (xrs1 +  ~xrs2 + 32'd1):
+  i_xor    ? (xrs1 ^  xrs2):
+  i_or     ? (xrs1 |  xrs2):
+  i_and    ? (xrs1 &  xrs2):
+  i_sll    ? (xrs1 << xrs2[4:0]):
+  i_srl    ? (xrs1 >> xrs2[4:0]):
+  i_sra    ? (xrs1s? (~((~xrs1) >> xrs2[4:0])):(xrs1 >> xrs2[4:0])):
+  i_slt    ? (lt? 32'd1:32'd0):
+  i_sltu   ? (ltu? 32'd1:32'd0):
+  i_addi   ? (xrs1 +  imm):
+  i_xori   ? (xrs1 ^  imm):
+  i_ori    ? (xrs1 |  imm):
+  i_andi   ? (xrs1 &  imm):
+  i_slli   ? (xrs1 << imm[4:0]):
+  i_srli   ? (xrs1 >> imm[4:0]):
+  i_srai   ? (xrs1s? (~((~xrs1) >> imm[4:0])):(xrs1 >> imm[4:0])):
+  i_slti   ? (lti? 32'd1:32'd0):
+  i_sltiu  ? (ltiu? 32'd1:32'd0):
+  i_jal    ? (pc + 32'd4):
+  i_jalr   ? (pc + 32'd4):
+  i_lui    ? imm:
+  i_auipc  ? (pc + imm):
+  i_lb     ? ({{24{rdata[7]}},rdata[7:0]}):
+  i_lh     ? ({{16{rdata[15]}},rdata[15:0]}):
+  i_lw     ? (rdata[31:0]):
+  i_lbu    ? ({{24{1'b0}},rdata[7:0]}):
+  i_lhu    ? ({{16{1'b0}},rdata[15:0]}):
+  32'd0;
+wire [31:0] npc = 
+  (i_jal ) ? (pc + imm):
+  (i_jalr) ? (xrs1 + imm):
+  (i_bgeu && geu) ? (pc + imm):
+  (i_bltu && ltu) ? (pc + imm):
+  (i_bge  && ge ) ? (pc + imm):
+  (i_blt  && lt ) ? (pc + imm):
+  (i_bne  && ne ) ? (pc + imm):
+  (i_beq  && eq ) ? (pc + imm):
+  pc + 32'd4;
+wire load = {sel,write,enable} == 3'b100;
+wire loaded = {sel,write,enable,ready} == 4'b1011;
+wire store = {sel,write,enable} == 3'b110;
+wire stored = {sel,write,enable,ready} == 4'b1111;
+//reg [5:0] mem_i;
+assign addr = xrs1 + imm;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    wdata <= 32'd0;
+    enable <= 1'b0;
+    pc <= 32'd0;
+    //for(mem_i=0;mem_i<=31;mem_i=mem_i+1) mem[mem_i] <= 32'd0;
+  end
+  else if(setb && instp) begin
+    if(load) begin
+      enable <= 1'b1;
+    end
+    else if(loaded) begin
+      enable <= 1'b0;
+      if((rd != 5'd0) && (~i_nop)) mem[rd[3:0]] <= xrd;
+      if(fetch) pc <= npc;
+    end
+    else if(store) begin
+      enable <= 1'b1;
+      if(i_sb) wdata[31:0] <= {rdata[31:8],xrs2[7:0]};
+      else if(i_sh) wdata[31:0] <= {rdata[31:16],xrs2[15:0]};
+      else if(i_sw) wdata[31:0] <= xrs2[31:0];
+    end
+    else if(stored) begin
+      enable <= 1'b0;
+      if(fetch) pc <= npc;
+    end
+    else begin
+      if((rd != 5'd0) && (~i_nop)) mem[rd[3:0]] <= xrd;
       if(fetch) pc <= npc;
     end
   end
@@ -714,7 +1151,7 @@ reg prstb, pclk, setb;
 wire psel, pwrite, penable;
 wire [31:0] paddr;
 wire [31:0] pwdata;
-reg fclk;
+reg [2:0] fclk;
 reg halt;
 wire irq;
 
@@ -741,7 +1178,7 @@ apb_hduart u_apb_hduart0 (
   .tx(tx[0]), 
   .rx(tx[1]), 
   .rxe(), .txe(), 
-  .fclk(fclk), 
+  .fclk(fclk[0]), 
   .prdata(prdata_hduart0), 
   .pwdata(pwdata), 
   .paddr(paddr_hduart0[3:0]), 
@@ -759,7 +1196,7 @@ apb_hduart u_apb_hduart1 (
   .tx(tx[1]), 
   .rx(tx[2]), 
   .rxe(), .txe(), 
-  .fclk(fclk), 
+  .fclk(fclk[1]), 
   .prdata(prdata_hduart1), 
   .pwdata(pwdata), 
   .paddr(paddr_hduart1[3:0]), 
@@ -777,7 +1214,7 @@ apb_hduart u_apb_hduart2 (
   .tx(tx[2]), 
   .rx(tx[0]), 
   .rxe(), .txe(), 
-  .fclk(fclk), 
+  .fclk(fclk[2]), 
   .prdata(prdata_hduart2), 
   .pwdata(pwdata), 
   .paddr(paddr_hduart2[3:0]), 
@@ -817,7 +1254,7 @@ wire [31:0] prdata =
   prdata_ram;
 reg pready;
 always@(negedge prstb or posedge pclk) if(~prstb) pready <= 1'b0; else pready <= penable;
-rv32im u_cpu (
+rv32e u_cpu (
   .rdata(prdata), 
   .wdata(pwdata), 
   .write(pwrite), .sel(psel), .enable(penable), .busreq(busreq), 
@@ -835,7 +1272,7 @@ task load_rom;
   begin
     $write("load_rom from 72.bin\n");
 /*
-riscv32-unknown-elf-gcc -march=rv32im -mabi=ilp32 -nostartfiles -mno-relax -O0 -c 72.c -g -o 72.o
+riscv32-unknown-elf-gcc -march=rv32i -mabi=ilp32 -nostartfiles -mno-relax -O0 -c 72.c -g -o 72.o
 riscv32-unknown-elf-ld -T 72.ld -o 72.elf 72.o
 riscv32-unknown-elf-objcopy -O binary 72.elf 72.bin
 riscv32-unknown-elf-objdump -S 72.o
@@ -855,39 +1292,41 @@ riscv32-unknown-elf-objdump -S 72.o
 endtask
 
 always #20.8 pclk = ~pclk;
-always #250.0 fclk = ~fclk;
+always #250.0 fclk[0] = ~fclk[0];
+always #251.0 fclk[1] = ~fclk[1];
+always #249.0 fclk[2] = ~fclk[2];
 
-wire [31:0] x_ra  = u_cpu.x[1];
-wire [31:0] x_sp  = u_cpu.x[2];
-wire [31:0] x_gp  = u_cpu.x[3];
-wire [31:0] x_tp  = u_cpu.x[4];
-wire [31:0] x_t0  = u_cpu.x[5];
-wire [31:0] x_t1  = u_cpu.x[6];
-wire [31:0] x_t2  = u_cpu.x[7];
-wire [31:0] x_s0  = u_cpu.x[8];
-wire [31:0] x_s1  = u_cpu.x[9];
-wire [31:0] x_a0  = u_cpu.x[10];
-wire [31:0] x_a1  = u_cpu.x[11];
-wire [31:0] x_a2  = u_cpu.x[12];
-wire [31:0] x_a3  = u_cpu.x[13];
-wire [31:0] x_a4  = u_cpu.x[14];
-wire [31:0] x_a5  = u_cpu.x[15];
-wire [31:0] x_a6  = u_cpu.x[16];
-wire [31:0] x_a7  = u_cpu.x[17];
-wire [31:0] x_s2  = u_cpu.x[18];
-wire [31:0] x_s3  = u_cpu.x[19];
-wire [31:0] x_s4  = u_cpu.x[20];
-wire [31:0] x_s5  = u_cpu.x[21];
-wire [31:0] x_s6  = u_cpu.x[22];
-wire [31:0] x_s7  = u_cpu.x[23];
-wire [31:0] x_s8  = u_cpu.x[24];
-wire [31:0] x_s9  = u_cpu.x[25];
-wire [31:0] x_s10 = u_cpu.x[26];
-wire [31:0] x_s11 = u_cpu.x[27];
-wire [31:0] x_t3  = u_cpu.x[28];
-wire [31:0] x_t4  = u_cpu.x[29];
-wire [31:0] x_t5  = u_cpu.x[30];
-wire [31:0] x_t6  = u_cpu.x[31];
+wire [31:0] x_ra  = u_cpu.mem[1];
+wire [31:0] x_sp  = u_cpu.mem[2];
+wire [31:0] x_gp  = u_cpu.mem[3];
+wire [31:0] x_tp  = u_cpu.mem[4];
+wire [31:0] x_t0  = u_cpu.mem[5];
+wire [31:0] x_t1  = u_cpu.mem[6];
+wire [31:0] x_t2  = u_cpu.mem[7];
+wire [31:0] x_s0  = u_cpu.mem[8];
+wire [31:0] x_s1  = u_cpu.mem[9];
+wire [31:0] x_a0  = u_cpu.mem[10];
+wire [31:0] x_a1  = u_cpu.mem[11];
+wire [31:0] x_a2  = u_cpu.mem[12];
+wire [31:0] x_a3  = u_cpu.mem[13];
+wire [31:0] x_a4  = u_cpu.mem[14];
+wire [31:0] x_a5  = u_cpu.mem[15];
+/*wire [31:0] x_a6  = u_cpu.mem[16];
+wire [31:0] x_a7  = u_cpu.mem[17];
+wire [31:0] x_s2  = u_cpu.mem[18];
+wire [31:0] x_s3  = u_cpu.mem[19];
+wire [31:0] x_s4  = u_cpu.mem[20];
+wire [31:0] x_s5  = u_cpu.mem[21];
+wire [31:0] x_s6  = u_cpu.mem[22];
+wire [31:0] x_s7  = u_cpu.mem[23];
+wire [31:0] x_s8  = u_cpu.mem[24];
+wire [31:0] x_s9  = u_cpu.mem[25];
+wire [31:0] x_s10 = u_cpu.mem[26];
+wire [31:0] x_s11 = u_cpu.mem[27];
+wire [31:0] x_t3  = u_cpu.mem[28];
+wire [31:0] x_t4  = u_cpu.mem[29];
+wire [31:0] x_t5  = u_cpu.mem[30];
+wire [31:0] x_t6  = u_cpu.mem[31];*/
 
 initial begin
   `ifdef FST
