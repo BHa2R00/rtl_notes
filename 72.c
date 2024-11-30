@@ -83,30 +83,105 @@ typedef struct
 #define hduart0 ((volatile hduart_t *) APB_HDUART0_A0)
 #define hduart1 ((volatile hduart_t *) APB_HDUART1_A0)
 #define hduart2 ((volatile hduart_t *) APB_HDUART2_A0)
-int set_baud(){
-  unsigned int divisor, dividend, baud, fclk, delay;
-  baud =  9216;
-  fclk = 20000;
-  dividend=0;
-  for(divisor=1;dividend<0x0fff;divisor++) dividend = (divisor * fclk) / baud;
-  if(dividend > 0x7ffe) return -1;
-  if(divisor > dividend) return -1;
-  delay = dividend / divisor;
+int softimul(int a, int b){
+  int m, neg;
+  if(a<0) { a=-a; neg=!neg; }
+  if(b<0) { b=-b; neg=!neg; }
+  while(b>0){
+    if(b&1) m+=a;
+    a<<=1;
+    b>>=1;
+  }
+  return neg? -m:m;
+}
+unsigned int softumul(unsigned int a, unsigned int b){
+  unsigned int m;
+  while(b>0){
+    if(b&1) m+=a;
+    a<<=1;
+    b>>=1;
+  }
+  return m;
+}
+int softidiv(int a, int b){
+  int q, r, neg, i;
+  if(a<0) { a=-a; neg=!neg; }
+  if(b<0) { b=-b; neg=!neg; }
+  q=0; r=0;
+  for(i=31;i>0;i--){
+    r<<=1;
+    r|=(b>>1)&1;
+    q<<=1;
+    if(r>a){ r-=a; q|=1; }
+  }
+  return neg ? -q:q;
+}
+unsigned int softudiv(unsigned int a, unsigned int b){
+  unsigned int q, r;
+  int i;
+  q=0; r=0;
+  for(i=31;i>0;i--){
+    r<<=1;
+    r|=(b>>1)&1;
+    q<<=1;
+    if(r>a){ r-=a; q|=1; }
+  }
+  return q;
+}
+int softirem(int a, int b){
+  int q, r, neg, i;
+  if(a<0) { a=-a; neg=!neg; }
+  if(b<0) { b=-b; neg=!neg; }
+  q=0; r=0;
+  for(i=31;i>0;i--){
+    r<<=1;
+    r|=(b>>1)&1;
+    q<<=1;
+    if(r>a){ r-=a; q|=1; }
+  }
+  return neg ? -r:r;
+}
+unsigned int softurem(unsigned int a, unsigned int b){
+  unsigned int q, r;
+  int i;
+  q=0; r=0;
+  for(i=31;i>0;i--){
+    r<<=1;
+    r|=(b>>1)&1;
+    q<<=1;
+    if(r>a){ r-=a; q|=1; }
+  }
+  return r;
+}
+/*int set_baud(){
+  int k;
+  unsigned int divisor[3], dividend[3], baud, delay[3], fclk[3];
+  baud =  1152;
+  fclk[0] = 20000;
+  fclk[1] = 20000;
+  fclk[2] = 20000;
+  for(k=0;k<=2;k++){
+    dividend[k]=0;
+    for(divisor[k]=1;dividend[k]<0x3fff;divisor[k]++) dividend[k] = divisor[k]*fclk[k]/baud;
+    if(dividend[k] > 0x7fff) return -1;
+    if(divisor[k] > dividend[k]) return -1;
+    delay[k] = dividend[k]/divisor[k];
+  }
   hduart0->ctrl.f.setb = 0x0;
   hduart1->ctrl.f.setb = 0x0;
   hduart2->ctrl.f.setb = 0x0;
   hduart0->baud.r = 0;
   hduart1->baud.r = 0;
   hduart2->baud.r = 0;
-  hduart0->baud.r = dividend | (divisor<<16);
-  hduart1->baud.r = dividend | (divisor<<16);
-  hduart2->baud.r = dividend | (divisor<<16);
-  hduart0->ctrl.f.delay = delay;
-  hduart1->ctrl.f.delay = delay;
-  hduart2->ctrl.f.delay = delay;
+  hduart0->baud.r = dividend[0] | (divisor[0]<<16);
+  hduart1->baud.r = dividend[1] | (divisor[1]<<16);
+  hduart2->baud.r = dividend[2] | (divisor[2]<<16);
+  hduart0->ctrl.f.delay = delay[0] & 0x1f;
+  hduart1->ctrl.f.delay = delay[0] & 0x1f;
+  hduart2->ctrl.f.delay = delay[2] & 0x1f;
   return 0;
-}
-void test1(){
+}*/
+void tx0rx2(){
   int k;
   hduart0->ctrl.f.txe = 0x1;
   hduart0->ctrl.f.rxe = 0x0;
@@ -126,7 +201,7 @@ void test1(){
   hduart2->ctrl.f.setb = 0x0;
   hduart0->ctrl.f.setb = 0x0;
 }
-void test2(){
+void tx1bist(){
   int k;
   hduart1->ctrl.f.txe = 0x1;
   hduart1->ctrl.f.rxe = 0x1;
@@ -139,8 +214,8 @@ void test2(){
   hduart1->ctrl.f.setb = 0x0;
 }
 void main() {
-  if(set_baud()==0){
-    test1();
-    test2();
-  }
+  //if(set_baud()==0){
+    tx0rx2();
+    tx1bist();
+  //}
 }
