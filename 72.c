@@ -2,12 +2,15 @@ void boot() {
   __asm__("li sp, 0x00ef");
   __asm__("jal main");
 }
-#define RAM_A0 ((unsigned int)0x0000)
-#define RAM_A1 (RAM_A0+0x00ff)
-#define APB_A0 ((unsigned int)0x1000)
+#define RAM_A0  ((unsigned int)0x0000)
+#define RAM_A1         (RAM_A0+0x0fff)
+#define APB_A0  ((unsigned int)0x1000)
 #define APB_HDUART0_A0 (APB_A0+0x0000)
 #define APB_HDUART1_A0 (APB_A0+0x0100)
 #define APB_HDUART2_A0 (APB_A0+0x0200)
+#define APB_TIMER0_A0  (APB_A0+0x0300)
+#define APB_TIMER1_A0  (APB_A0+0x0400)
+#define APB_TIMER2_A0  (APB_A0+0x0500)
 typedef union
 {
   volatile unsigned int r;
@@ -60,8 +63,8 @@ typedef union
   volatile unsigned int r;
   struct
   {
-    volatile unsigned int cnt          :  4 ;
-    volatile unsigned int th           :  4 ;
+    volatile unsigned int cnt          :  5 ;
+    volatile unsigned int th           :  5 ;
     volatile unsigned int clear        :  1 ;
     volatile unsigned int trig         :  1 ;
     volatile unsigned int empty        :  1 ;
@@ -70,7 +73,7 @@ typedef union
     volatile unsigned int stop         :  1 ;
     volatile unsigned int match        :  1 ;
     volatile unsigned int enadma       :  1 ;
-    volatile unsigned int unused2      : 16 ;
+    volatile unsigned int unused2      : 14 ;
   }f;
 }hduart_t_fifo;
 typedef struct
@@ -80,9 +83,43 @@ typedef struct
   volatile hduart_t_data data;
   volatile hduart_t_fifo fifo;
 }hduart_t;
+typedef union
+{
+  volatile unsigned int r;
+  struct
+  {
+    volatile unsigned int en           :  1 ;
+    volatile unsigned int ld           :  1 ;
+    volatile unsigned int os           :  1 ;
+    volatile unsigned int fr           :  1 ;
+    volatile unsigned int ie           :  1 ;
+    volatile unsigned int ee           :  1 ;
+    volatile unsigned int is           :  1 ;
+    volatile unsigned int es           :  1 ;
+    volatile unsigned int he           :  1 ;
+    volatile unsigned int lr           :  1 ;
+    volatile unsigned int unused0      : 22 ;
+  }f;
+}timer_t_ctrl;
+typedef union
+{
+  volatile unsigned int r;
+  struct
+  {
+    volatile unsigned int cntr         : 32 ;
+  }f;
+}timer_t_cntr;
+typedef struct
+{
+  volatile timer_t_ctrl ctrl;
+  volatile timer_t_cntr cntr;
+}timer_t;
 #define hduart0 ((volatile hduart_t *) APB_HDUART0_A0)
 #define hduart1 ((volatile hduart_t *) APB_HDUART1_A0)
 #define hduart2 ((volatile hduart_t *) APB_HDUART2_A0)
+#define timer0  ((volatile timer_t  *) APB_TIMER0_A0 )
+#define timer1  ((volatile timer_t  *) APB_TIMER1_A0 )
+#define timer2  ((volatile timer_t  *) APB_TIMER2_A0 )
 int softimul(int a, int b){
   int m, neg;
   if(a<0) { a=-a; neg=!neg; }
@@ -193,8 +230,16 @@ void tx0rx2(){
   hduart2->ctrl.f.smsb = 1;
   hduart0->ctrl.f.parity = 1;
   hduart2->ctrl.f.parity = 1;
+  hduart0->ctrl.f.even = 1;
+  hduart2->ctrl.f.even = 1;
+  timer2->cntr.f.cntr = 10;
+  timer2->ctrl.f.os = 1;
+  timer2->ctrl.f.is = 1;
+  timer2->ctrl.f.en = 1;
+  while(timer2->ctrl.f.is==0);
   hduart2->ctrl.f.setb = 0x1;
-  k=0; while(hduart0->fifo.f.full==0) hduart0->data.f.bchar = 0xa0+(k++);
+  k=0; 
+  while(hduart0->fifo.f.full==0) hduart0->data.f.bchar = (0x01ff & ('@'+(k++)));
   hduart0->ctrl.f.setb = 0x1;
   while(hduart2->fifo.f.full==0);
   while(hduart2->fifo.f.empty==0) k = hduart2->data.f.bchar;
@@ -214,8 +259,15 @@ void tx1bist(){
   hduart1->ctrl.f.setb = 0x0;
 }
 void main() {
+  int k;
   //if(set_baud()==0){
-    tx0rx2();
-    tx1bist();
+    timer1->cntr.f.cntr = 10;
+    timer1->ctrl.f.en = 1;
+    for(k=0;k<=3;k++){
+      timer1->ctrl.f.is = 1;
+      while(timer1->ctrl.f.is==0);
+      tx0rx2();
+      tx1bist();
+    }
   //}
 }
