@@ -24,6 +24,7 @@ set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "2.5 V"
 set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
 set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
 set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_global_assignment -name AUTO_RAM_RECOGNITION OFF 
 set_location_assignment PIN_91 -to clk
 set_location_assignment PIN_88 -to rst
 set_location_assignment PIN_89 -to setb
@@ -34,6 +35,24 @@ set_location_assignment PIN_106 -to tx[1]
 set_location_assignment PIN_110 -to rx[1]
 set_location_assignment PIN_111 -to tx[2]
 set_location_assignment PIN_112 -to rx[2]
+set_location_assignment PIN_113 -to scli[0]
+set_location_assignment PIN_115 -to scli[1]
+set_location_assignment PIN_120 -to scli[2]
+set_location_assignment PIN_114 -to sdai[0]
+set_location_assignment PIN_119 -to sdai[1]
+set_location_assignment PIN_121 -to sdai[2]
+set_location_assignment PIN_124 -to sclo[0]
+set_location_assignment PIN_126 -to sclo[1]
+set_location_assignment PIN_128 -to sclo[2]
+set_location_assignment PIN_125 -to sdao[0]
+set_location_assignment PIN_127 -to sdao[1]
+set_location_assignment PIN_129 -to sdao[2]
+set_location_assignment PIN_133 -to scloe[0]
+set_location_assignment PIN_136 -to scloe[1]
+set_location_assignment PIN_138 -to scloe[2]
+set_location_assignment PIN_132 -to sdaoe[0]
+set_location_assignment PIN_135 -to sdaoe[1]
+set_location_assignment PIN_137 -to sdaoe[2]
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 execute_flow -compile
 export_assignments
