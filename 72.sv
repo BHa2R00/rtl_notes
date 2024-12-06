@@ -201,7 +201,7 @@ clkdiv #(
   .setb(setb && uclkena), 
   .rstb(frstb), .clk(fclk) 
 );
-reg [1:0] uclk_d, push_d, pop_d, clear_d;
+reg [1:0] uclk_d, push_d, pop_d, clear_d, even_d;
 wire uclk_p = uclk_d[1:0] == 2'b01;
 wire uclk_n = uclk_d[1:0] == 2'b10;
 wire push_p = push_d[1:0] == 2'b01;
@@ -213,12 +213,14 @@ always@(negedge rstb or posedge clk) begin
     push_d <= 2'b00;
     pop_d <= 2'b00;
     clear_d <= 2'b00;
+    even_d <= 2'b00;
   end
   else begin
     uclk_d <= {uclk_d[0],uclk};
     push_d <= {push_d[0],push};
     pop_d <= {pop_d[0],pop};
     clear_d <= {clear_d[0],clear};
+    even_d <= {even_d[0],even};
   end
 end
 wire [3:0]   idlebit = sb - 4'd0;
@@ -258,7 +260,7 @@ always@(negedge rstb or posedge clk) begin
       if(({txe,empty} == 2'b10) || ({rxe,full,rx} == 3'b100)) begin
         sb <= 4'd1;
         uclkena <= 1'b1;
-        if(checkena) bx <= ~even;
+        if(checkena) bx <= ~even_d[1];
       end
     end
     else if(uclk_n) begin
@@ -288,20 +290,24 @@ always@(negedge rstb or posedge clk) begin
   else if({push_p,full} == 2'b10) ma1 <= ma1 + 'd1;
   else if({rxe,endena,uclk_p,full} == 4'b1110) ma1 <= ma1 + 'd1;
 end
-wire err = 
-  (startena && rx) ? 1'b1 : 
-  (stopena && (~rx)) ? 1'b1 : 
-  (parityena && (~stopena) && (bx != rx)) ? 1'b1 : 
-  1'b0;
+reg err;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) err <= 1'b0;
+  else if(rxe && uclk_n) begin
+    if(startena) err <= rx;
+    else if(parityena && (~stopena)) err <= (bx != rx);
+    else if(stopena) err <= ~rx;
+  end
+end
 always@(posedge clk) begin
   if({push_p,full} == 2'b10) mem[ma1[(HDUART_FIFO_AMSB-1):0]] <= wchar;
   else if(rxe && uclk_p) begin
     if(charena) mem[ma1[(HDUART_FIFO_AMSB-1):0]][charbit] <= rx;
-    else if((charbit != HDUART_CHECK_SB) && (charbit <= HDUART_FIFO_DMSB)) mem[ma1[(HDUART_FIFO_AMSB-1):0]][charbit] <= 1'b0;
-    else if(checkena && (charbit == HDUART_CHECK_SB)) mem[ma1[(HDUART_FIFO_AMSB-1):0]][HDUART_CHECK_SB] <= err;
+    else if(checkena && parityena) mem[ma1[(HDUART_FIFO_AMSB-1):0]][HDUART_CHECK_SB] <= err;
   end
 end
-assign rchar = mem[ma0[(HDUART_FIFO_AMSB-1):0]];
+wire [HDUART_FIFO_DMSB:0] rmask = ((1<<HDUART_CHECK_SB)|((1<<(cmsb+1))-1));
+assign rchar = mem[ma0[(HDUART_FIFO_AMSB-1):0]] & rmask;
 assign match = endena && (mchar == mem[ma1[(HDUART_FIFO_AMSB-1):0]]);
 
 endmodule
@@ -1156,6 +1162,395 @@ end
 endmodule
 
 
+module iic #(
+  parameter IIC_FIFO_AMSB = 3 
+)(
+  output reg aack, dack, 
+  output full, empty, idleena, 
+  input [IIC_FIFO_AMSB:0] dth,
+  output [IIC_FIFO_AMSB:0] cnt,
+  output [7:0] rchar, 
+  input [7:0] wchar,
+  input pop, push, clear,
+  output reg [10:0] raddr, 
+  input [10:0] waddr, 
+  input addr10bit, 
+  input sdai, 
+  output sdaoe, sdao, 
+  output sclo, 
+  input master, scli, 
+  input [7:0] divisor, dividend, 
+  output reg [4:0] bs, 
+  input setb, 
+  input rstb, clk, fclk 
+);
+
+wire scl = master ? sclo : scli;
+wire rw  = master ? waddr[0] : raddr[0];
+wire [4:0] startbit = bs - 5'd20 - (addr10bit ? 5'd3 : 5'd0);
+wire [4:0]  addrbit = bs - 5'd12;
+wire [4:0]    rwbit = bs - 5'd12;
+wire [4:0]  aackbit = bs - 5'd11;
+wire [4:0]  databit = bs - 5'd3;
+wire [4:0]  dackbit = bs - 5'd2;
+wire [4:0]  stopbit = bs - 5'd1;
+wire [4:0]  idlebit = bs - 5'd0;
+wire  startena = ( 5'd0  == startbit);
+wire   addrena = (((addr10bit ? 5'd10 : 5'd7) >=  addrbit) && ( addrbit >= 5'd0));
+wire     rwena = ( 5'd0  ==    rwbit);
+wire   aackena = ( 5'd0  ==  aackbit);
+wire   dataena = ((5'd7  >=  databit) && ( databit >= 5'd0));
+wire   dackena = ( 5'd0  ==  dackbit);
+wire   stopena = ( 5'd0  ==  stopbit);
+assign idleena = ( 5'd0  ==  idlebit);
+reg sclena;
+clkdiv #(
+  .INIT(1'b1), 
+  .MSB(7) 
+) u_sclo (
+  .lck(sclo), 
+  .delay(4'd0), 
+  .dividend(dividend), .divisor(divisor), 
+  .setb(setb && sclena), 
+  .rstb(rstb), .clk(fclk) 
+);
+assign sdaoe = 
+  (startena||addrena||rwena||stopena) ?   master                 :
+  aackena                             ? ({master,aack} == 2'b00) :
+  dataena                             ?   master^rw              :
+  dackena                             ? ({master,dack} == 2'b00) :
+  1'b0;
+reg [7:0] m[0:((2**IIC_FIFO_AMSB)-1)];
+reg [IIC_FIFO_AMSB:0] ma1, ma0;
+assign cnt = ma1 - ma0;
+assign full = cnt == dth;
+assign empty = cnt == 'h0;
+assign sdao = 
+  startena ? 1'b0 : 
+   addrena ? waddr[addrbit[IIC_FIFO_AMSB:0]] : 
+     rwena ? waddr[0] : 
+   aackena ? aack : 
+   dataena ? m[ma0[(IIC_FIFO_AMSB-1):0]][databit[2:0]] : 
+   dackena ? dack : 
+   stopena ? 1'b0 : 
+  1'b1;
+wire sda = sdaoe ? sdao : sdai;
+reg [2:0] scl_d, sda_d;
+wire scl_1 = scl_d == 3'b111;
+wire scl_p = scl_d == 3'b011;
+wire scl_n = scl_d == 3'b100;
+wire sda_p = sda_d == 3'b011;
+wire sda_n = sda_d == 3'b100;
+reg [1:0] pop_d, push_d, clear_d;
+wire pop_p = pop_d == 2'b01;
+wire push_p = push_d == 2'b01;
+wire clear_p = clear_d == 2'b01;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    scl_d <= 3'b111;
+    sda_d <= 3'b111;
+    pop_d <= 2'b11;
+    push_d <= 2'b11;
+    pop_d <= 2'b11;
+    clear_d <= 2'b11;
+  end
+  else begin
+    scl_d <= {scl_d[1:0],scl};
+    sda_d <= {sda_d[1:0],sda};
+    pop_d <= {pop_d[0],pop};
+    push_d <= {push_d[0],push};
+    clear_d <= {clear_d[0],clear};
+  end
+end
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    bs <= 5'd0;
+    aack <= 1'b1;
+    dack <= 1'b1;
+    raddr <= 11'd0;
+    sclena <= 1'b0;
+  end
+  else if(setb) begin
+    if(idleena) begin
+      if((~master) && sda_n && scl_1) begin
+        bs <= 5'd20 + (addr10bit ? 5'd3 : 5'd0);
+        aack <= 1'b1;
+        dack <= 1'b1;
+        sclena <= 1'b0;
+        raddr <= 11'd0;
+      end
+      else if(master && (rw ? 1'b1 : (~empty)) && scl_1) begin
+        bs <= 5'd20 + (addr10bit ? 5'd3 : 5'd0);
+        aack <= 1'b1;
+        dack <= 1'b1;
+        sclena <= 1'b1;
+        raddr <= 11'd0;
+      end
+    end
+    if(startena) begin
+      if(scl_n) bs <= bs - 5'd1;
+    end
+    if(addrena && ~rwena) begin
+      if(scl_p) raddr[addrbit[IIC_FIFO_AMSB:0]] <= sda;
+      else if(scl_n) bs <= bs - 5'd1;
+    end
+    if(rwena) begin
+      if(scl_p) raddr[0] <= sda;
+      else if(scl_n) begin
+        bs <= bs - 5'd1;
+        if(~master) aack <= waddr[10:1] != raddr[10:1];
+      end
+    end
+    if(aackena) begin
+      if(scl_p && master) aack <= sda;
+      else if(scl_n) bs <= aack ? 5'd1 : (bs - 5'd1);
+    end
+    if(dataena) begin
+      if(scl_n) begin
+        bs <= bs - 5'd1;
+        if(~master && (databit == 5'd0)) dack <= (rw ? empty : full);
+      end
+    end
+    if(dackena) begin
+      if(scl_p && master) dack <= sda;
+      else if(scl_n) bs <= dack ? (bs - 5'd1) : 5'd10;
+    end
+    if(stopena) begin
+      if(scl_p) begin
+        sclena <= 1'b0;
+        bs <= 5'd0;
+      end
+    end
+  end
+  else bs <= 5'd0;
+end
+//reg [IIC_FIFO_AMSB:0] m_i;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    ma0 <= {(IIC_FIFO_AMSB+1){1'b0}};
+    ma1 <= {(IIC_FIFO_AMSB+1){1'b0}};
+    //for(m_i=0;m_i<=((2**IIC_FIFO_AMSB)-1);m_i=m_i+1) m[m_i] <= 8'd0;
+  end
+  else if(clear_p) begin
+    ma0 <= {(IIC_FIFO_AMSB+1){1'b0}};
+    ma1 <= {(IIC_FIFO_AMSB+1){1'b0}};
+  end
+  else if(push_p && (~full)) begin
+    ma1 <= ma1 + 'd1;
+    m[ma1[(IIC_FIFO_AMSB-1):0]] <= wchar;
+  end
+  else if(pop_p && (~empty)) ma0 <= ma0 + 'd1;
+  else if(master ^ rw) begin
+    if(( databit == 5'd0) && scl_n && (~empty)) ma0 <= ma0 + 'd1;
+  end
+  else if(master ~^ rw) begin
+    if(( databit == 5'd0) && scl_n && (~full)) ma1 <= ma1 + 'd1;
+    if(dataena && scl_p) m[ma1[(IIC_FIFO_AMSB-1):0]][databit[2:0]] <= sda;
+  end
+end
+assign rchar = m[ma0[(IIC_FIFO_AMSB-1):0]];
+
+endmodule
+
+
+module apb_iic #(
+  parameter IIC_FIFO_AMSB = 3 
+) ( 
+  output [4:0] debug, 
+  output dma_req, 
+  input dma_ack, 
+  output irq, 
+  input sdai, 
+  output sdaoe, sdao, 
+  output sclo, scloe, 
+  input scli, 
+  input fclk, 
+  output reg [31:0] prdata, 
+  input [31:0] pwdata, 
+  input [3:0] paddr, 
+  input prstb, pclk, psel, pwrite, penable 
+);
+
+reg  setb;
+wire sdao0, sdaoe0;
+reg  [6:0] sdao0_d, sdaoe0_d;
+wire [7:0] sdao0_dn  = {sdao0_d[6:0],sdao0};
+wire [7:0] sdaoe0_dn = {sdaoe0_d[6:0],sdaoe0};
+reg  [2:0] setup;
+assign sdao  = sdao0_dn[setup];
+assign sdaoe = sdaoe0_dn[setup];
+always@(negedge prstb or posedge fclk) begin
+  if(~prstb) begin
+    sdao0_d  <= 'h7f;
+    sdaoe0_d <= 'h7f;
+  end
+  else begin
+    sdao0_d  <= {sdao0_d[5:0],sdao0};
+    sdaoe0_d <= {sdaoe0_d[5:0],sdaoe0};
+  end
+end
+wire ctrl_ena = (paddr == 'h0) && psel;
+wire cdiv_ena = (paddr == 'h4) && psel;
+wire data_ena = (paddr == 'h8) && psel;
+wire fifo_ena = (paddr == 'hc) && psel;
+wire aack, dack;
+wire full, empty;
+reg [IIC_FIFO_AMSB:0] dth;
+wire [IIC_FIFO_AMSB:0] cnt;
+reg [3:0] th;
+reg  trig, dmaena;
+wire [10:0] raddr;
+reg  [10:0] waddr;
+wire [7:0] rchar;
+reg  [7:0] wchar;
+reg  clear;
+reg  addr10bit;
+reg  master;
+assign scloe = master;
+reg  [7:0] divisor, dividend;
+wire [4:0] bs;
+wire rw = master ? waddr[0] : raddr[0];
+wire push = dmaena ? ((~rw) && dma_ack) : (data_ena && penable &&   pwrite );
+wire pop  = dmaena ? (  rw  && dma_ack) : (data_ena && penable && (~pwrite));
+wire idleena;
+iic #(
+  .IIC_FIFO_AMSB(IIC_FIFO_AMSB)
+)
+u_iic (
+  .aack(aack), .dack(dack), 
+  .full(full), .empty(empty), .idleena(idleena), 
+  .dth(dth),
+  .cnt(cnt),
+  .rchar(rchar), 
+  .wchar(wchar),
+  .pop(pop), .push(push), .clear(clear),
+  .raddr(raddr), 
+  .waddr(waddr), 
+  .addr10bit(addr10bit), 
+  .sdai(sdai), 
+  .sdaoe(sdaoe0), .sdao(sdao0), 
+  .sclo(sclo), 
+  .master(master), .scli(scli), 
+  .divisor(divisor), .dividend(dividend), 
+  .bs(bs), 
+  .setb(setb), 
+  .rstb(prstb), .clk(pclk), .fclk(fclk) 
+);
+reg irqena_aack, irqena_dack;
+reg irqena_empty, irqena_full, irqena_trig;
+assign irq = 
+  (irqena_aack  && aack )||
+  (irqena_dack  && dack )||
+  (irqena_empty && empty)||
+  (irqena_full  && full )||
+  (irqena_trig  && trig );
+wire nxt_trig = rw ? (cnt>=th) : (th>=cnt);
+assign dma_req = dmaena && nxt_trig;
+reg  [1:0] nxt_trig_d;
+wire nxt_trig_p = nxt_trig_d == 2'b01;
+always@(negedge prstb or posedge pclk) begin
+  if(~prstb) nxt_trig_d <= 2'b00;
+  else nxt_trig_d <= {nxt_trig_d[0],nxt_trig};
+end
+always@(*) begin
+  prdata = 32'd0;
+  if(ctrl_ena) begin
+    prdata[0]     = setb        ;
+    prdata[1]     = master      ;
+    prdata[2]     = addr10bit   ;
+    prdata[13:3]  = waddr[10:0] ;
+    prdata[24:14] = raddr[10:0] ;
+    prdata[25]    = aack        ;
+    prdata[26]    = dack        ;
+    prdata[27]    = irqena_aack ;
+    prdata[28]    = irqena_dack ;
+    prdata[29]    = irqena_empty;
+    prdata[30]    = irqena_full ;
+    prdata[31]    = irqena_trig ;
+  end
+  if(cdiv_ena) begin
+    prdata[7:0]  = dividend[7:0];
+    prdata[15:8] = divisor[7:0] ;
+  end
+  if(data_ena) begin
+    // replace rchar[7:0] bchar[7:0] 
+    prdata[7:0] = rchar[7:0];
+    // prdata[31:8] = unused1[23:0];
+  end
+  if(fifo_ena) begin
+    prdata[3:0]   = cnt[3:0]  ;
+    prdata[7:4]   = th[3:0]   ;
+    prdata[8]     = empty     ;
+    prdata[9]     = full      ;
+    prdata[10]    = idleena   ;
+    prdata[11]    = clear     ;
+    prdata[12]    = trig      ;
+    prdata[13]    = dmaena    ;
+    prdata[16:14] = setup[2:0];
+    prdata[20:17] = dth[3:0]  ;
+    // prdata[31:21] = unused0[10:0];
+  end
+end
+always@(negedge prstb or posedge pclk) begin
+  if(~prstb) begin //default 
+    setb <= 'h0;
+    master <= 'h0;
+    addr10bit <= 'h0;
+    waddr[10:0] <= 'h0;
+    irqena_aack  <= 'h0;
+    irqena_dack  <= 'h0;
+    irqena_empty <= 'h0;
+    irqena_full  <= 'h0;
+    irqena_trig  <= 'h0;
+    dividend[7:0] <= 'h7e;
+    divisor[7:0] <= 'h0c;
+    wchar[7:0] <= 'h0;
+    th[3:0] <= 'h0;
+    trig <= 'h0;
+    dmaena <= 'h0;
+    clear <= 'h0;
+    trig <= 'h0;
+    setup <= 'h0;
+    dth <= 'h8;
+  end
+  else begin
+    if(nxt_trig_p) trig <= 1'b1;
+    if(pwrite) begin
+      if(ctrl_ena) begin
+        setb         <= pwdata[0]   ;
+        master       <= pwdata[1]   ;
+        addr10bit    <= pwdata[2]   ;
+        waddr[10:0]  <= pwdata[13:3];
+        irqena_aack  <= pwdata[27]  ;
+        irqena_dack  <= pwdata[28]  ;
+        irqena_empty <= pwdata[29]  ;
+        irqena_full  <= pwdata[30]  ;
+        irqena_trig  <= pwdata[31]  ;
+      end
+      if(cdiv_ena) begin
+        dividend[7:0] <= pwdata[7:0] ;
+        divisor[7:0]  <= pwdata[15:8];
+      end
+      if(data_ena) begin
+        // replace wchar[7:0] bchar[7:0] 
+        wchar[7:0]  <= pwdata[7:0] ;
+      end
+      if(fifo_ena) begin
+        th[3:0]    <= pwdata[7:4]  ;
+        clear      <= pwdata[11]   ;
+        trig       <= pwdata[12] ? 'h0 : trig; // w1c
+        dmaena     <= pwdata[13]   ;
+        setup[2:0] <= pwdata[16:14];
+        dth[3:0]   <= pwdata[20:17];
+      end
+    end
+  end
+end
+assign debug[4:0] = bs[4:0];
+
+endmodule
+
+
 module mcyc2 (output done, clk2, input setb, rstb, clk);
 reg [1:0] d;
 always@(negedge rstb or posedge clk) begin
@@ -1430,197 +1825,6 @@ end
 endmodule
 
 
-module rv32i (
-  input [31:0] rdata, 
-  output reg [31:0] wdata, 
-  output reg enable, 
-  output write, sel, busreq, 
-  input ready, grant, 
-  output [31:0] addr, 
-  output idle, 
-  input [31:0] inst, 
-  output reg [31:0] pc, 
-  input [31:0] pc0, pc1, 
-  input setb, fetch, 
-  input rstb, clk 
-);
-
-assign idle = (pc >= pc1) || (pc0 > pc1);
-reg [31:0] mem[1:31];
-wire [6:0] opcode = inst[6:0];
-wire fmtr   = (opcode == 7'b0110011);
-wire fmti   = (opcode == 7'b0010011);
-wire fmtil  = (opcode == 7'b0000011);
-wire fmts   = (opcode == 7'b0100011);
-wire fmtb   = (opcode == 7'b1100011);
-wire fmtj   = (opcode == 7'b1101111);
-wire fmtijr = (opcode == 7'b1100111);
-wire fmtu   = (opcode == 7'b0110111);
-wire fmtup  = (opcode == 7'b0010111);
-//wire fmtie  = (opcode == 7'b1110011);
-wire [2:0] funct3 = inst[14:12];
-wire [6:0] funct7 = inst[31:25];
-wire [4:0] rd  = (|{fmtr,fmti,fmtil,fmtu,fmtup,fmtj,fmtijr})? inst[11:7]:5'd0;
-wire [4:0] rs1 = (|{fmtr,fmti,fmtil,fmts,fmtb,fmtijr})? inst[19:15]:5'd0;
-wire [4:0] rs2 = (|{fmtr,fmts,fmtb})? inst[24:20]:5'd0;
-wire [31:0] imm = 
-  (fmti || fmtil || fmtijr)? {{20{inst[31]}},inst[31:20]}:
-  fmts? {{20{inst[31]}},inst[31:25],inst[11:7]}:
-  fmtb? {{19{inst[31]}},inst[31],inst[7],inst[30:25],inst[11:8],1'b0}:
-  (fmtu || fmtup)? {inst[31:12],12'd0}:
-  fmtj? {{12{inst[31]}},inst[31],inst[19:12],inst[20],inst[30:21],1'b0}:
-  32'd0;
-wire instp = inst[1:0] == 2'b11;
-wire i_nop    = fmti   && (~|inst[31:7]);
-wire i_add    = fmtr   && (funct3==3'h0) && (funct7==7'h00);
-wire i_sub    = fmtr   && (funct3==3'h0) && (funct7==7'h20);
-wire i_xor    = fmtr   && (funct3==3'h4) && (funct7==7'h00);
-wire i_or     = fmtr   && (funct3==3'h6) && (funct7==7'h00);
-wire i_and    = fmtr   && (funct3==3'h7) && (funct7==7'h00);
-wire i_sll    = fmtr   && (funct3==3'h1) && (funct7==7'h00);
-wire i_srl    = fmtr   && (funct3==3'h5) && (funct7==7'h00);
-wire i_sra    = fmtr   && (funct3==3'h5) && (funct7==7'h20);
-wire i_slt    = fmtr   && (funct3==3'h2) && (funct7==7'h00);
-wire i_sltu   = fmtr   && (funct3==3'h3) && (funct7==7'h00);
-wire i_addi   = fmti   && (funct3==3'h0);
-wire i_xori   = fmti   && (funct3==3'h4);
-wire i_ori    = fmti   && (funct3==3'h6);
-wire i_andi   = fmti   && (funct3==3'h7);
-wire i_slli   = fmti   && (funct3==3'h1) && (imm[11:5]==7'h00);
-wire i_srli   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h00);
-wire i_srai   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h20);
-wire i_slti   = fmti   && (funct3==3'h2);
-wire i_sltiu  = fmti   && (funct3==3'h3);
-wire i_lb     = fmtil  && (funct3==3'h0);
-wire i_lh     = fmtil  && (funct3==3'h1);
-wire i_lw     = fmtil  && (funct3==3'h2);
-wire i_lbu    = fmtil  && (funct3==3'h4);
-wire i_lhu    = fmtil  && (funct3==3'h5);
-wire i_sb     = fmts   && (funct3==3'h0);
-wire i_sh     = fmts   && (funct3==3'h1);
-wire i_sw     = fmts   && (funct3==3'h2);
-wire i_beq    = fmtb   && (funct3==3'h0);
-wire i_bne    = fmtb   && (funct3==3'h1);
-wire i_blt    = fmtb   && (funct3==3'h4);
-wire i_bge    = fmtb   && (funct3==3'h5);
-wire i_bltu   = fmtb   && (funct3==3'h6);
-wire i_bgeu   = fmtb   && (funct3==3'h7);
-wire i_jal    = fmtj;
-wire i_jalr   = fmtijr && (funct3==3'h0);
-wire i_lui    = fmtu;
-wire i_auipc  = fmtup;
-//wire i_ecall  = fmtie  && (funct3==3'h0) && (funct7==7'h0);
-//wire i_ebreak = fmtie  && (funct3==3'h0) && (funct7==7'h1);
-assign busreq = (fmtil || fmts);
-assign write = fmts && grant;
-assign sel = busreq && grant;
-wire [31:0] xrs1 = (rs1==5'd0)? 32'd0:mem[rs1];
-wire [31:0] xrs2 = (rs2==5'd0)? 32'd0:mem[rs2];
-wire xrs1s = xrs1[31];
-wire xrs2s = xrs2[31];
-wire imms = imm[31];
-wire [31:0] xrs1u = xrs1s? ((~xrs1) + 32'd1):xrs1;
-wire [31:0] xrs2u = xrs2s? ((~xrs2) + 32'd1):xrs2;
-wire [31:0] immu = imms? ((~imm) + 32'd1):imm;
-wire ltu = xrs1u < xrs2u;
-wire geu = ~ltu;
-wire lt = 
-  ({xrs1s,xrs2s}==2'b11) ? ~ltu:
-  ({xrs1s,xrs2s}==2'b10) ? 1'b1:
-  ({xrs1s,xrs2s}==2'b01) ? 1'b0:
-  ltu;
-wire eq = xrs1 == xrs2;
-wire ne = ~eq;
-wire ge = ~lt;
-wire ltiu = xrs1u < immu;
-wire lti = 
-  ({xrs1s,imms}==2'b11)? ~ltiu:
-  ({xrs1s,imms}==2'b10)? 1'b1:
-  ({xrs1s,imms}==2'b01)? 1'b0:
-  ltiu;
-wire [31:0] xrd = 
-  i_add    ? (xrs1 +  xrs2):
-  i_sub    ? (xrs1 +  ~xrs2 + 32'd1):
-  i_xor    ? (xrs1 ^  xrs2):
-  i_or     ? (xrs1 |  xrs2):
-  i_and    ? (xrs1 &  xrs2):
-  i_sll    ? (xrs1 << xrs2[4:0]):
-  i_srl    ? (xrs1 >> xrs2[4:0]):
-  i_sra    ? (xrs1s? (~((~xrs1) >> xrs2[4:0])):(xrs1 >> xrs2[4:0])):
-  i_slt    ? (lt? 32'd1:32'd0):
-  i_sltu   ? (ltu? 32'd1:32'd0):
-  i_addi   ? (xrs1 +  imm):
-  i_xori   ? (xrs1 ^  imm):
-  i_ori    ? (xrs1 |  imm):
-  i_andi   ? (xrs1 &  imm):
-  i_slli   ? (xrs1 << imm[4:0]):
-  i_srli   ? (xrs1 >> imm[4:0]):
-  i_srai   ? (xrs1s? (~((~xrs1) >> imm[4:0])):(xrs1 >> imm[4:0])):
-  i_slti   ? (lti? 32'd1:32'd0):
-  i_sltiu  ? (ltiu? 32'd1:32'd0):
-  i_jal    ? (pc + 32'd4):
-  i_jalr   ? (pc + 32'd4):
-  i_lui    ? imm:
-  i_auipc  ? (pc + imm):
-  i_lb     ? ({{24{rdata[7]}},rdata[7:0]}):
-  i_lh     ? ({{16{rdata[15]}},rdata[15:0]}):
-  i_lw     ? (rdata[31:0]):
-  i_lbu    ? ({{24{1'b0}},rdata[7:0]}):
-  i_lhu    ? ({{16{1'b0}},rdata[15:0]}):
-  32'd0;
-wire [31:0] npc = 
-  (i_jal ) ? (pc + imm):
-  (i_jalr) ? (xrs1 + imm):
-  (i_bgeu && geu) ? (pc + imm):
-  (i_bltu && ltu) ? (pc + imm):
-  (i_bge  && ge ) ? (pc + imm):
-  (i_blt  && lt ) ? (pc + imm):
-  (i_bne  && ne ) ? (pc + imm):
-  (i_beq  && eq ) ? (pc + imm):
-  pc + 32'd4;
-wire load = {sel,write,enable} == 3'b100;
-wire loaded = {sel,write,enable,ready} == 4'b1011;
-wire store = {sel,write,enable} == 3'b110;
-wire stored = {sel,write,enable,ready} == 4'b1111;
-//reg [5:0] mem_i;
-assign addr = xrs1 + imm;
-always@(negedge rstb or posedge clk) begin
-  if(~rstb) begin
-    wdata <= 32'd0;
-    enable <= 1'b0;
-    pc <= 32'd0;
-    //for(mem_i=0;mem_i<=31;mem_i=mem_i+1) mem[mem_i] <= 32'd0;
-  end
-  else if(setb && instp) begin
-    if(load) begin
-      enable <= 1'b1;
-    end
-    else if(loaded) begin
-      enable <= 1'b0;
-      if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
-      if(fetch) pc <= npc;
-    end
-    else if(store) begin
-      enable <= 1'b1;
-      if(i_sb) wdata[31:0] <= {rdata[31:8],xrs2[7:0]};
-      else if(i_sh) wdata[31:0] <= {rdata[31:16],xrs2[15:0]};
-      else if(i_sw) wdata[31:0] <= xrs2[31:0];
-    end
-    else if(stored) begin
-      enable <= 1'b0;
-      if(fetch) pc <= npc;
-    end
-    else begin
-      if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
-      if(fetch) pc <= npc;
-    end
-  end
-  else pc <= pc0;
-end
-
-endmodule
-
-
 module rv32e (
   input [31:0] rdata, 
   output reg [31:0] wdata, 
@@ -1792,7 +1996,7 @@ always@(negedge rstb or posedge clk) begin
           if(load) enable <= 1'b1;
           else if(loaded) begin
             enable <= 1'b0;
-            if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
+            if((rd != 5'd0) && (~i_nop)) mem[rd[3:0]] <= xrd;
             pc <= npc;
           end
           else if(store) begin
@@ -1806,7 +2010,7 @@ always@(negedge rstb or posedge clk) begin
             pc <= npc;
           end
           else begin
-            if((rd != 5'd0) && (~i_nop)) mem[rd] <= xrd;
+            if((rd != 5'd0) && (~i_nop)) mem[rd[3:0]] <= xrd;
             pc <= npc;
           end
         end
@@ -1998,6 +2202,208 @@ end
 endmodule
 
 
+module rv32i (
+  input [31:0] rdata, 
+  output reg [31:0] wdata, 
+  output reg enable, 
+  output write, sel, busreq, 
+  input ready, grant, 
+  output [31:0] addr, 
+  output idle, 
+  input [31:0] inst, 
+  output reg [31:0] pc, 
+  input [31:0] pc0, pc1, 
+  output reg instreq, 
+  input setb, fetch, 
+  input rstb, clk 
+);
+
+assign idle = pc == pc1;
+reg [31:0] mem[1:31];
+wire [6:0] opcode = inst[6:0];
+wire fmtr   = (opcode == 7'b0110011);
+wire fmti   = (opcode == 7'b0010011);
+wire fmtil  = (opcode == 7'b0000011);
+wire fmts   = (opcode == 7'b0100011);
+wire fmtb   = (opcode == 7'b1100011);
+wire fmtj   = (opcode == 7'b1101111);
+wire fmtijr = (opcode == 7'b1100111);
+wire fmtu   = (opcode == 7'b0110111);
+wire fmtup  = (opcode == 7'b0010111);
+//wire fmtie  = (opcode == 7'b1110011);
+wire [2:0] funct3 = inst[14:12];
+wire [6:0] funct7 = inst[31:25];
+wire [4:0] rd  = (|{fmtr,fmti,fmtil,fmtu,fmtup,fmtj,fmtijr})? inst[11:7]:5'd0;
+wire [4:0] rs1 = (|{fmtr,fmti,fmtil,fmts,fmtb,fmtijr})? inst[19:15]:5'd0;
+wire [4:0] rs2 = (|{fmtr,fmts,fmtb})? inst[24:20]:5'd0;
+wire [31:0] imm = 
+  (fmti || fmtil || fmtijr)? {{20{inst[31]}},inst[31:20]}:
+  fmts? {{20{inst[31]}},inst[31:25],inst[11:7]}:
+  fmtb? {{19{inst[31]}},inst[31],inst[7],inst[30:25],inst[11:8],1'b0}:
+  (fmtu || fmtup)? {inst[31:12],12'd0}:
+  fmtj? {{12{inst[31]}},inst[31],inst[19:12],inst[20],inst[30:21],1'b0}:
+  32'd0;
+wire instp = inst[1:0] == 2'b11;
+wire i_nop    = fmti   && (~|inst[31:7]);
+wire i_add    = fmtr   && (funct3==3'h0) && (funct7==7'h00);
+wire i_sub    = fmtr   && (funct3==3'h0) && (funct7==7'h20);
+wire i_xor    = fmtr   && (funct3==3'h4) && (funct7==7'h00);
+wire i_or     = fmtr   && (funct3==3'h6) && (funct7==7'h00);
+wire i_and    = fmtr   && (funct3==3'h7) && (funct7==7'h00);
+wire i_sll    = fmtr   && (funct3==3'h1) && (funct7==7'h00);
+wire i_srl    = fmtr   && (funct3==3'h5) && (funct7==7'h00);
+wire i_sra    = fmtr   && (funct3==3'h5) && (funct7==7'h20);
+wire i_slt    = fmtr   && (funct3==3'h2) && (funct7==7'h00);
+wire i_sltu   = fmtr   && (funct3==3'h3) && (funct7==7'h00);
+wire i_addi   = fmti   && (funct3==3'h0);
+wire i_xori   = fmti   && (funct3==3'h4);
+wire i_ori    = fmti   && (funct3==3'h6);
+wire i_andi   = fmti   && (funct3==3'h7);
+wire i_slli   = fmti   && (funct3==3'h1) && (imm[11:5]==7'h00);
+wire i_srli   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h00);
+wire i_srai   = fmti   && (funct3==3'h5) && (imm[11:5]==7'h20);
+wire i_slti   = fmti   && (funct3==3'h2);
+wire i_sltiu  = fmti   && (funct3==3'h3);
+wire i_lb     = fmtil  && (funct3==3'h0);
+wire i_lh     = fmtil  && (funct3==3'h1);
+wire i_lw     = fmtil  && (funct3==3'h2);
+wire i_lbu    = fmtil  && (funct3==3'h4);
+wire i_lhu    = fmtil  && (funct3==3'h5);
+wire i_sb     = fmts   && (funct3==3'h0);
+wire i_sh     = fmts   && (funct3==3'h1);
+wire i_sw     = fmts   && (funct3==3'h2);
+wire i_beq    = fmtb   && (funct3==3'h0);
+wire i_bne    = fmtb   && (funct3==3'h1);
+wire i_blt    = fmtb   && (funct3==3'h4);
+wire i_bge    = fmtb   && (funct3==3'h5);
+wire i_bltu   = fmtb   && (funct3==3'h6);
+wire i_bgeu   = fmtb   && (funct3==3'h7);
+wire i_jal    = fmtj;
+wire i_jalr   = fmtijr && (funct3==3'h0);
+wire i_lui    = fmtu;
+wire i_auipc  = fmtup;
+//wire i_ecall  = fmtie  && (funct3==3'h0) && (funct7==7'h0);
+//wire i_ebreak = fmtie  && (funct3==3'h0) && (funct7==7'h1);
+assign busreq = (fmtil || fmts);
+assign write = fmts && grant;
+assign sel = busreq && grant;
+wire [31:0] xrs1 = (rs1==5'd0)? 32'd0:mem[rs1[4:0]];
+wire [31:0] xrs2 = (rs2==5'd0)? 32'd0:mem[rs2[4:0]];
+wire xrs1s = xrs1[31];
+wire xrs2s = xrs2[31];
+wire imms = imm[31];
+wire [31:0] xrs1u = xrs1s? ((~xrs1) + 32'd1):xrs1;
+wire [31:0] xrs2u = xrs2s? ((~xrs2) + 32'd1):xrs2;
+wire [31:0] immu = imms? ((~imm) + 32'd1):imm;
+wire ltu = xrs1u < xrs2u;
+wire geu = ~ltu;
+wire lt = 
+  ({xrs1s,xrs2s}==2'b11) ? ~ltu:
+  ({xrs1s,xrs2s}==2'b10) ? 1'b1:
+  ({xrs1s,xrs2s}==2'b01) ? 1'b0:
+  ltu;
+wire eq = xrs1 == xrs2;
+wire ne = ~eq;
+wire ge = ~lt;
+wire ltiu = xrs1u < immu;
+wire lti = 
+  ({xrs1s,imms}==2'b11)? ~ltiu:
+  ({xrs1s,imms}==2'b10)? 1'b1:
+  ({xrs1s,imms}==2'b01)? 1'b0:
+  ltiu;
+wire [31:0] xrd = 
+  i_add    ? (xrs1 +  xrs2):
+  i_sub    ? (xrs1 +  ~xrs2 + 32'd1):
+  i_xor    ? (xrs1 ^  xrs2):
+  i_or     ? (xrs1 |  xrs2):
+  i_and    ? (xrs1 &  xrs2):
+  i_sll    ? (xrs1 << xrs2[4:0]):
+  i_srl    ? (xrs1 >> xrs2[4:0]):
+  i_sra    ? (xrs1s? (~((~xrs1) >> xrs2[4:0])):(xrs1 >> xrs2[4:0])):
+  i_slt    ? (lt? 32'd1:32'd0):
+  i_sltu   ? (ltu? 32'd1:32'd0):
+  i_addi   ? (xrs1 +  imm):
+  i_xori   ? (xrs1 ^  imm):
+  i_ori    ? (xrs1 |  imm):
+  i_andi   ? (xrs1 &  imm):
+  i_slli   ? (xrs1 << imm[4:0]):
+  i_srli   ? (xrs1 >> imm[4:0]):
+  i_srai   ? (xrs1s? (~((~xrs1) >> imm[4:0])):(xrs1 >> imm[4:0])):
+  i_slti   ? (lti? 32'd1:32'd0):
+  i_sltiu  ? (ltiu? 32'd1:32'd0):
+  i_jal    ? (pc + 32'd4):
+  i_jalr   ? (pc + 32'd4):
+  i_lui    ? imm:
+  i_auipc  ? (pc + imm):
+  i_lb     ? ({{24{rdata[7]}},rdata[7:0]}):
+  i_lh     ? ({{16{rdata[15]}},rdata[15:0]}):
+  i_lw     ? (rdata[31:0]):
+  i_lbu    ? ({{24{1'b0}},rdata[7:0]}):
+  i_lhu    ? ({{16{1'b0}},rdata[15:0]}):
+  32'd0;
+wire [31:0] npc = 
+  (i_jal ) ? (pc + imm):
+  (i_jalr) ? (xrs1 + imm):
+  (i_bgeu && geu) ? (pc + imm):
+  (i_bltu && ltu) ? (pc + imm):
+  (i_bge  && ge ) ? (pc + imm):
+  (i_blt  && lt ) ? (pc + imm):
+  (i_bne  && ne ) ? (pc + imm):
+  (i_beq  && eq ) ? (pc + imm):
+  pc + 32'd4;
+wire load = {sel,write,enable} == 3'b100;
+wire loaded = {sel,write,enable,ready} == 4'b1011;
+wire store = {sel,write,enable} == 3'b110;
+wire stored = {sel,write,enable,ready} == 4'b1111;
+//reg [5:0] mem_i;
+assign addr = xrs1 + imm;
+always@(negedge rstb or posedge clk) begin
+  if(~rstb) begin
+    wdata <= 32'd0;
+    enable <= 1'b0;
+    pc <= 32'd0;
+    //for(mem_i=0;mem_i<=31;mem_i=mem_i+1) mem[mem_i] <= 32'd0;
+    instreq <= 1'b0;
+  end
+  else if(setb) begin
+    if(~idle) begin
+      if(fetch && instreq) begin
+        instreq <= 1'b0;
+        if(instp) begin
+          if(load) enable <= 1'b1;
+          else if(loaded) begin
+            enable <= 1'b0;
+            if((rd[4:0] != 5'd0) && (~i_nop)) mem[rd[4:0]] <= xrd;
+            pc <= npc;
+          end
+          else if(store) begin
+            enable <= 1'b1;
+            if(i_sb) wdata[31:0] <= {rdata[31:8],xrs2[7:0]};
+            else if(i_sh) wdata[31:0] <= {rdata[31:16],xrs2[15:0]};
+            else if(i_sw) wdata[31:0] <= xrs2[31:0];
+          end
+          else if(stored) begin
+            enable <= 1'b0;
+            pc <= npc;
+          end
+          else begin
+            if((rd[4:0] != 5'd0) && (~i_nop)) mem[rd[4:0]] <= xrd;
+            pc <= npc;
+          end
+        end
+      end
+      else instreq <= 1'b1;
+    end
+  end
+  else begin
+    pc <= pc0;
+    instreq <= 1'b0;
+  end
+end
+
+endmodule
+
+
 `ifdef FPGA
 module rom #(
   parameter AMSB = 11, 
@@ -2007,8 +2413,10 @@ module rom #(
 	input	  clk,
 	output	[DMSB:0]  rdata
 );
+parameter AMSB1 = AMSB-2;
+wire [AMSB1:0] addr1 = addr[AMSB:2];
 	altsyncram	altsyncram_component (
-				.address_a (addr>>2),
+				.address_a (addr1),
 				.clock0 (clk),
 				.q_a (rdata),
 				.aclr0 (1'b0),
@@ -2040,11 +2448,11 @@ module rom #(
 		altsyncram_component.intended_device_family = "Cyclone IV E",
 		altsyncram_component.lpm_hint = "ENABLE_RUNTIME_MOD=NO",
 		altsyncram_component.lpm_type = "altsyncram",
-		altsyncram_component.numwords_a = (1<<(AMSB-1)),
+		//altsyncram_component.numwords_a = (1<<(AMSB-1)),
 		altsyncram_component.operation_mode = "ROM",
 		altsyncram_component.outdata_aclr_a = "NONE",
 		altsyncram_component.outdata_reg_a = "CLOCK0",
-		altsyncram_component.widthad_a = (AMSB+1),
+		altsyncram_component.widthad_a = (AMSB1+1),
 		altsyncram_component.width_a = (DMSB+1),
 		altsyncram_component.width_byteena_a = 1;
 endmodule
@@ -2058,8 +2466,10 @@ module ram #(
 	input	  clk,
 	output	[DMSB:0]  rdata
 );
+parameter AMSB1 = AMSB-2;
+wire [AMSB1:0] addr1 = addr[AMSB:2];
 	altsyncram	altsyncram_component (
-				.address_a (addr>>2),
+				.address_a (addr1),
 				.clock0 (clk),
 				.q_a (rdata),
 				.aclr0 (1'b0),
@@ -2083,20 +2493,20 @@ module ram #(
 				.wren_a (~write),
 				.wren_b (1'b0));
 	defparam
-		altsyncram_component.byte_size = 8,
+		//altsyncram_component.byte_size = 8,
 		altsyncram_component.clock_enable_input_a = "BYPASS",
 		altsyncram_component.clock_enable_output_a = "BYPASS",
 		//altsyncram_component.init_file = "./altera_ram.mif",
 		altsyncram_component.intended_device_family = "Cyclone IV E",
 		altsyncram_component.lpm_hint = "ENABLE_RUNTIME_MOD=NO",
 		altsyncram_component.lpm_type = "altsyncram",
-		altsyncram_component.numwords_a = (1<<(AMSB-1)),
+		//altsyncram_component.numwords_a = (1<<(AMSB-1)),
 		altsyncram_component.operation_mode = "SINGLE_PORT",
 		altsyncram_component.outdata_aclr_a = "NONE",
 		altsyncram_component.outdata_reg_a = "CLOCK0",
 		altsyncram_component.power_up_uninitialized = "FALSE",
 		altsyncram_component.read_during_write_mode_port_a = "DONT_CARE",
-		altsyncram_component.widthad_a = (AMSB+1),
+		altsyncram_component.widthad_a = (AMSB1+1),
 		altsyncram_component.width_a = (DMSB+1),
 		altsyncram_component.width_byteena_a = 1;
 endmodule
@@ -2108,6 +2518,25 @@ module rom #(
   parameter AMSB = 11, 
   parameter DMSB = 31 
 )(
+	input	[AMSB:0]  addr,
+	input	  clk,
+	output	reg [DMSB:0]  rdata
+);
+reg [7:0] mem[0:((1<<(AMSB+1))-1)];
+always@(posedge clk) begin
+  rdata[7:0] <= mem[addr];
+  rdata[15:8] <= mem[addr+1];
+  rdata[23:16] <= mem[addr+2];
+  rdata[31:24] <= mem[addr+3];
+end
+endmodule
+module link_rom #(
+  parameter AMSB = 11, 
+  parameter DMSB = 31 
+)(
+  output empty_addr, full_rdata, 
+  input fill_addr, drain_rdata, 
+  input rstb, 
 	input	[AMSB:0]  addr,
 	input	  clk,
 	output	reg [DMSB:0]  rdata
@@ -2148,6 +2577,9 @@ endmodule
 
 
 module ft1(
+  output [2:0] sdao, sdaoe, 
+  output [2:0] sclo, scloe, 
+  input [2:0] scli, sdai, 
   output [2:0] tx, 
   input [2:0] rx, 
   output idle, 
@@ -2156,46 +2588,28 @@ module ft1(
 );
 
 wire rstb = ~rst;
-wire clk2m, clk4m, clk32k, clk1m;
-clkdiv #(
-  .INIT(1'b0), 
-  .MSB(15) 
-) u_clk2m (
-  .lck(clk2m), 
-  .delay(4'd0), 
-  .dividend(16'd50), .divisor(16'd2), 
-  .setb(setb), 
-  .rstb(rstb), .clk(clk) 
+wire [3:0] fclk;
+reg [15:0] dividend[0:3];
+reg [15:0] divisor[0:3];
+clkdiv #(.INIT(1'b0), .MSB(15)) u_fclk0 (
+  .lck(fclk[0]), 
+  .delay(4'd0), .dividend(dividend[0]), .divisor(divisor[0]), 
+  .setb(setb), .rstb(rstb), .clk(clk)
 );
-clkdiv #(
-  .INIT(1'b0), 
-  .MSB(15) 
-) u_clk4m (
-  .lck(clk4m), 
-  .delay(4'd0), 
-  .dividend(16'd50), .divisor(16'd4), 
-  .setb(setb), 
-  .rstb(rstb), .clk(clk) 
+clkdiv #(.INIT(1'b0), .MSB(15)) u_fclk1 (
+  .lck(fclk[1]), 
+  .delay(4'd0), .dividend(dividend[1]), .divisor(divisor[1]), 
+  .setb(setb), .rstb(rstb), .clk(clk)
 );
-clkdiv #(
-  .INIT(1'b0), 
-  .MSB(15) 
-) u_clk32k (
-  .lck(clk32k), 
-  .delay(4'd0), 
-  .dividend(16'd50000), .divisor(16'd32), 
-  .setb(setb), 
-  .rstb(rstb), .clk(clk) 
+clkdiv #(.INIT(1'b0), .MSB(15)) u_fclk2 (
+  .lck(fclk[2]), 
+  .delay(4'd0), .dividend(dividend[2]), .divisor(divisor[2]), 
+  .setb(setb), .rstb(rstb), .clk(clk)
 );
-clkdiv #(
-  .INIT(1'b0), 
-  .MSB(15) 
-) u_clk1m (
-  .lck(clk1m), 
-  .delay(4'd0), 
-  .dividend(16'd50), .divisor(16'd1), 
-  .setb(setb), 
-  .rstb(rstb), .clk(clk) 
+clkdiv #(.INIT(1'b0), .MSB(15)) u_fclk3 (
+  .lck(fclk[3]), 
+  .delay(4'd0), .dividend(dividend[3]), .divisor(divisor[3]), 
+  .setb(setb), .rstb(rstb), .clk(clk)
 );
 
 wire prstb = rstb;
@@ -2203,7 +2617,6 @@ wire pclk = clk;
 wire psel, pwrite, penable;
 wire [31:0] paddr;
 wire [31:0] pwdata;
-wire [5:0] fclk = {clk1m,clk32k,clk4m,clk2m,clk2m,clk2m};
 
 `define RAM_A0                  'h0000
 `define RAM_A1         (`RAM_A0+'h0fff)
@@ -2220,6 +2633,14 @@ wire [5:0] fclk = {clk1m,clk32k,clk4m,clk2m,clk2m,clk2m};
 `define APB_TIMER1_A1  (`APB_A0+'h0407)
 `define APB_TIMER2_A0  (`APB_A0+'h0500)
 `define APB_TIMER2_A1  (`APB_A0+'h0507)
+`define APB_IIC0_A0    (`APB_A0+'h0600)
+`define APB_IIC0_A1    (`APB_A0+'h060f)
+`define APB_IIC1_A0    (`APB_A0+'h0700)
+`define APB_IIC1_A1    (`APB_A0+'h070f)
+`define APB_IIC2_A0    (`APB_A0+'h0800)
+`define APB_IIC2_A1    (`APB_A0+'h080f)
+`define APB_SYS_A0     (`APB_A0+'h0900)
+`define APB_SYS_A1     (`APB_A0+'h09ff)
 
 wire [31:0] paddr_hduart0 = paddr - `APB_HDUART0_A0;
 wire psel_hduart0 = psel && (`APB_HDUART0_A1 >= paddr) && (paddr >= `APB_HDUART0_A0);
@@ -2236,7 +2657,7 @@ apb_hduart #(
   .tx(tx[0]), 
   .rx(rx[0]), 
   .rxe(), .txe(), 
-  .fclk(fclk[0]), 
+  .fclk(fclk[3]), 
   .prdata(prdata_hduart0), 
   .pwdata(pwdata), 
   .paddr(paddr_hduart0[3:0]), 
@@ -2258,7 +2679,7 @@ apb_hduart #(
   .tx(tx[1]), 
   .rx(rx[1]), 
   .rxe(), .txe(), 
-  .fclk(fclk[1]), 
+  .fclk(fclk[3]), 
   .prdata(prdata_hduart1), 
   .pwdata(pwdata), 
   .paddr(paddr_hduart1[3:0]), 
@@ -2280,7 +2701,7 @@ apb_hduart #(
   .tx(tx[2]), 
   .rx(rx[2]), 
   .rxe(), .txe(), 
-  .fclk(fclk[2]), 
+  .fclk(fclk[3]), 
   .prdata(prdata_hduart2), 
   .pwdata(pwdata), 
   .paddr(paddr_hduart2[3:0]), 
@@ -2296,7 +2717,7 @@ apb_timer #(
 ) u_apb_timer0 (
   .irq(), 
   .halt(1'b0), 
-  .fclk(fclk[3]), 
+  .fclk(fclk[0]), 
   .prdata(prdata_timer0), 
   .pwdata(pwdata), 
   .paddr(paddr_timer0[2:0]), 
@@ -2313,7 +2734,7 @@ apb_timer #(
 ) u_apb_timer1 (
   .irq(), 
   .halt(1'b0), 
-  .fclk(fclk[4]), 
+  .fclk(fclk[1]), 
   .prdata(prdata_timer1), 
   .pwdata(pwdata), 
   .paddr(paddr_timer1[2:0]), 
@@ -2330,7 +2751,7 @@ apb_timer #(
 ) u_apb_timer2 (
   .irq(), 
   .halt(1'b0), 
-  .fclk(fclk[5]), 
+  .fclk(fclk[2]), 
   .prdata(prdata_timer2), 
   .pwdata(pwdata), 
   .paddr(paddr_timer2[2:0]), 
@@ -2338,9 +2759,132 @@ apb_timer #(
   .prstb(prstb), .pclk(pclk) 
 );
 
+wire [31:0] paddr_iic0 = paddr - `APB_IIC0_A0;
+wire psel_iic0 = psel && (`APB_IIC0_A1 >= paddr) && (paddr >= `APB_IIC0_A0);
+wire [31:0] prdata_iic0;
+apb_iic #(
+  .IIC_FIFO_AMSB(3)
+)
+u_apb_iic0 (
+  .debug(), 
+  .dma_req(), 
+  .dma_ack(1'b0), 
+  .irq(), 
+  .sdai(sdai[0]), 
+  .sdaoe(sdaoe[0]), .sdao(sdao[0]), 
+  .sclo(sclo[0]), .scloe(scloe[0]), 
+  .scli(scli[0]), 
+  .fclk(fclk[3]), 
+  .prdata(prdata_iic0), 
+  .pwdata(pwdata), 
+  .paddr(paddr_iic0[3:0]), 
+  .prstb(prstb), .pclk(pclk), .psel(psel_iic0), .pwrite(pwrite), .penable(penable) 
+);
+
+wire [31:0] paddr_iic1 = paddr - `APB_IIC1_A0;
+wire psel_iic1 = psel && (`APB_IIC1_A1 >= paddr) && (paddr >= `APB_IIC1_A0);
+wire [31:0] prdata_iic1;
+apb_iic #(
+  .IIC_FIFO_AMSB(3)
+)
+u_apb_iic1 (
+  .debug(), 
+  .dma_req(), 
+  .dma_ack(1'b0), 
+  .irq(), 
+  .sdai(sdai[1]), 
+  .sdaoe(sdaoe[1]), .sdao(sdao[1]), 
+  .sclo(sclo[1]), .scloe(scloe[1]), 
+  .scli(scli[1]), 
+  .fclk(fclk[3]), 
+  .prdata(prdata_iic1), 
+  .pwdata(pwdata), 
+  .paddr(paddr_iic1[3:0]), 
+  .prstb(prstb), .pclk(pclk), .psel(psel_iic1), .pwrite(pwrite), .penable(penable) 
+);
+
+wire [31:0] paddr_iic2 = paddr - `APB_IIC2_A0;
+wire psel_iic2 = psel && (`APB_IIC2_A1 >= paddr) && (paddr >= `APB_IIC2_A0);
+wire [31:0] prdata_iic2;
+apb_iic #(
+  .IIC_FIFO_AMSB(3)
+) 
+u_apb_iic2 (
+  .debug(), 
+  .dma_req(), 
+  .dma_ack(1'b0), 
+  .irq(), 
+  .sdai(sdai[2]), 
+  .sdaoe(sdaoe[2]), .sdao(sdao[2]), 
+  .sclo(sclo[2]), .scloe(scloe[2]), 
+  .scli(scli[2]), 
+  .fclk(fclk[3]), 
+  .prdata(prdata_iic2), 
+  .pwdata(pwdata), 
+  .paddr(paddr_iic2[3:0]), 
+  .prstb(prstb), .pclk(pclk), .psel(psel_iic2), .pwrite(pwrite), .penable(penable) 
+);
+
+wire [31:0] paddr_sys = paddr - `APB_SYS_A0;
+wire psel_sys = psel && (`APB_SYS_A1 >= paddr) && (paddr >= `APB_SYS_A0);
+reg [31:0] prdata_sys;
+wire syscdiv0_ena = (paddr_sys == 'h0) && psel_sys;
+wire syscdiv1_ena = (paddr_sys == 'h4) && psel_sys;
+wire syscdiv2_ena = (paddr_sys == 'h8) && psel_sys;
+wire syscdiv3_ena = (paddr_sys == 'hc) && psel_sys;
+always@(*) begin
+  if(syscdiv0_ena) begin
+    prdata_sys[15:00] = dividend[0][15:0]; 
+    prdata_sys[31:16] = divisor[0][15:0];
+  end
+  if(syscdiv1_ena) begin
+    prdata_sys[15:00] = dividend[1][15:0]; 
+    prdata_sys[31:16] = divisor[1][15:0];
+  end
+  if(syscdiv2_ena) begin
+    prdata_sys[15:00] = dividend[2][15:0]; 
+    prdata_sys[31:16] = divisor[2][15:0];
+  end
+  if(syscdiv3_ena) begin
+    prdata_sys[15:00] = dividend[3][15:0]; 
+    prdata_sys[31:16] = divisor[3][15:0];
+  end
+end
+always@(negedge prstb or posedge pclk) begin
+  if(~prstb) begin
+    dividend[0] <= 16'd50000;
+    divisor[0] <= 16'd32;
+    dividend[1] <= 16'd50000;
+    divisor[1] <= 16'd512;
+    dividend[2] <= 16'd50;
+    divisor[2] <= 16'd1;
+    dividend[3] <= 16'd50;
+    divisor[3] <= 16'd2;
+  end
+  else if(pwrite && penable) begin
+    if(syscdiv0_ena) begin
+      dividend[0][15:0] <= pwdata[15:00];
+      divisor[0][15:0]  <= pwdata[31:16];
+    end
+    if(syscdiv1_ena) begin
+      dividend[1][15:0] <= pwdata[15:00];
+      divisor[1][15:0]  <= pwdata[31:16];
+    end
+    if(syscdiv2_ena) begin
+      dividend[2][15:0] <= pwdata[15:00];
+      divisor[2][15:0]  <= pwdata[31:16];
+    end
+    if(syscdiv3_ena) begin
+      dividend[3][15:0] <= pwdata[15:00];
+      divisor[3][15:0]  <= pwdata[31:16];
+    end
+  end
+end
+
 wire instreq;
 wire [31:0] pc, inst;
-rom #(.AMSB(11), .DMSB(31)) u_rom(.addr(pc[11:0]), .clk(pclk), .rdata(inst));
+rom #(.AMSB(11), .DMSB(31)) u_rom0(.addr(pc[11:0]), .clk(pclk), .rdata(inst));
+
 reg [31:0] ram[0:(`RAM_A1>>2)];
 wire [31:0] paddr_ram = paddr - `RAM_A0;
 wire [31:0] prdata_ram;
@@ -2348,16 +2892,20 @@ wire psel_ram = psel && (`RAM_A1 >= paddr_ram) && (paddr_ram >= `RAM_A0);
 ram #(
   .AMSB(11), 
   .DMSB(31) 
-) u_ram(
+) u_ram0(
 	.wdata(pwdata),
   .write(pwrite), 
 	.addr(paddr_ram[11:0]),
 	.clk(pclk),
 	.rdata(prdata_ram)
 );
+
 wire busreq;
 wire grant = busreq;
 wire [31:0] prdata =
+  psel_iic0 ? prdata_iic0 : 
+  psel_iic1 ? prdata_iic1 : 
+  psel_iic2 ? prdata_iic2 : 
   psel_timer0 ? prdata_timer0 : 
   psel_timer1 ? prdata_timer1 : 
   psel_timer2 ? prdata_timer2 : 
@@ -2369,7 +2917,7 @@ reg pready;
 reg [1:0]fetch;
 always@(negedge prstb or posedge pclk) if(~prstb) pready <= 1'b0; else pready <= penable;
 always@(negedge prstb or posedge pclk) if(~prstb) fetch <= 2'b00; else fetch <= {fetch[0],instreq};
-rv32e u_cpu (
+rv32e u_cpu0 (
   .rdata(prdata), 
   .wdata(pwdata), 
   .write(pwrite), .sel(psel), .enable(penable), .busreq(busreq), 
@@ -2392,12 +2940,30 @@ module ft1_tb1;
 
 reg rst, clk, setb;
 wire idle;
+
 wire [2:0] tx, rx;
 assign rx[0] = tx[1];
 assign rx[1] = tx[2];
 assign rx[2] = tx[0];
 
+supply1 vcc;
+supply0 gnd;
+tri sda, scl;
+wire [2:0] sdaoe, scloe;
+wire [2:0] sdao, sclo;
+pullup u_pu_sda (sda);
+pullup u_pu_scl (scl);
+nmos u_pd_sda0 (sda,gnd,(sdaoe[0]&&(~sdao[0])));
+nmos u_pd_sda1 (sda,gnd,(sdaoe[1]&&(~sdao[1])));
+nmos u_pd_sda2 (sda,gnd,(sdaoe[2]&&(~sdao[2])));
+nmos u_pd_scl0 (scl,gnd,(scloe[0]&&(~sclo[0])));
+nmos u_pd_scl1 (scl,gnd,(scloe[1]&&(~sclo[1])));
+nmos u_pd_scl2 (scl,gnd,(scloe[2]&&(~sclo[2])));
+
 ft1 u_ft1 (
+  .sdao(sdao), .sdaoe(sdaoe), 
+  .sclo(sclo), .scloe(scloe), 
+  .scli({scl,scl,scl}), .sdai({sda,sda,sda}), 
   .tx(tx), 
   .rx(rx), 
   .idle(idle), 
@@ -2412,17 +2978,17 @@ task load_rom;
   begin
     $write("load_rom from 72.bin\n");
 /*
-riscv32-unknown-elf-gcc -march=rv32e -mabi=ilp32e -nostartfiles -mno-relax -O0 -c 72.c -g -o 72.o
+riscv32-unknown-elf-gcc -march=rv32e -mabi=ilp32e -nostartfiles -mno-relax -O4 -c 72.c -g -o 72.o
 riscv32-unknown-elf-ld -T 72.ld -o 72.elf 72.o
 riscv32-unknown-elf-objcopy -O binary 72.elf 72.bin
 riscv32-unknown-elf-objdump -S 72.o
  */
     fp = $fopen("72.bin","rb");
     pc0='h0;
-    for(pc1=pc0;pc1<=('hfff-pc0);pc1=pc1+1) u_ft1.u_rom.mem[pc1] = 8'd0;
+    for(pc1=pc0;pc1<=('hfff-pc0);pc1=pc1+1) u_ft1.u_rom0.mem[pc1] = 8'd0;
     pc1 = pc0;
     while(!$feof(fp)) begin
-      u_ft1.u_rom.mem[pc1] = $fgetc(fp);
+      u_ft1.u_rom0.mem[pc1] = $fgetc(fp);
       pc1=pc1+1;
     end
     pc1 = pc1-1;
@@ -2434,15 +3000,18 @@ endtask
 always #20 clk = ~clk;
 //integer ram_i;
 
-always@(posedge u_ft1.u_apb_timer0.hit) $write("%d ns: timer0 hit\n",$time);
-always@(posedge u_ft1.u_apb_timer1.hit) $write("%d ns: timer1 hit\n",$time);
-always@(posedge u_ft1.u_apb_timer2.hit) $write("%d ns: timer2 hit\n",$time);
-always@(posedge u_ft1.u_apb_timer0.en) $write("%d ns: timer0 en\n",$time);
-always@(posedge u_ft1.u_apb_timer1.en) $write("%d ns: timer1 en\n",$time);
-always@(posedge u_ft1.u_apb_timer2.en) $write("%d ns: timer2 en\n",$time);
-always@(posedge u_ft1.u_apb_hduart0.setb) $write("%d ns: hduart0 setb\n",$time);
-always@(posedge u_ft1.u_apb_hduart1.setb) $write("%d ns: hduart1 setb\n",$time);
-always@(posedge u_ft1.u_apb_hduart2.setb) $write("%d ns: hduart2 setb\n",$time);
+always@(posedge u_ft1.u_apb_timer0.hit) $write("%d ns: timer0.hit\n",$time);
+always@(posedge u_ft1.u_apb_timer1.hit) $write("%d ns: timer1.hit\n",$time);
+always@(posedge u_ft1.u_apb_timer2.hit) $write("%d ns: timer2.hit\n",$time);
+always@(posedge u_ft1.u_apb_timer0.en) $write("%d ns: timer0.en\n",$time);
+always@(posedge u_ft1.u_apb_timer1.en) $write("%d ns: timer1.en\n",$time);
+always@(posedge u_ft1.u_apb_timer2.en) $write("%d ns: timer2.en\n",$time);
+always@(posedge u_ft1.u_apb_hduart0.setb) $write("%d ns: hduart0.setb\n",$time);
+always@(posedge u_ft1.u_apb_hduart1.setb) $write("%d ns: hduart1.setb\n",$time);
+always@(posedge u_ft1.u_apb_hduart2.setb) $write("%d ns: hduart2.setb\n",$time);
+always@(posedge u_ft1.u_apb_iic0.setb) $write("%d ns: iic0.setb\n",$time);
+always@(posedge u_ft1.u_apb_iic1.setb) $write("%d ns: iic1.setb\n",$time);
+always@(posedge u_ft1.u_apb_iic2.setb) $write("%d ns: iic2.setb\n",$time);
 
 initial begin
   `ifdef FST
